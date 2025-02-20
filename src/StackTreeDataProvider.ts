@@ -133,9 +133,25 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       );
       stackTreeItem.id = element.stack.name;
       stackTreeItem.iconPath = new ThemeIcon("layers");
-      stackTreeItem.description = `${element.stack.sourceBranch} (${
+
+      const sourceBranchDetails =
+        element.stack.status.branches[element.stack.sourceBranch];
+      let description = element.stack.sourceBranch;
+      if (sourceBranchDetails) {
+        if (
+          sourceBranchDetails.status.aheadOfRemote > 0 ||
+          sourceBranchDetails.status.behindRemote > 0
+        ) {
+          description += `  ${sourceBranchDetails.status.behindRemote}\u2193 ${sourceBranchDetails.status.aheadOfRemote}\u2191`;
+        }
+        description += `  \u21c6  origin/${element.stack.sourceBranch}`;
+      }
+
+      description += ` (${element.stack.branches.length} ${pluralize(
+        "branch",
         element.stack.branches.length
-      } ${pluralize("branch", element.stack.branches.length)})`;
+      )})`;
+      stackTreeItem.description = description;
       stackTreeItem.contextValue = "stack";
       return stackTreeItem;
     } else if (element.type === "branch") {
@@ -148,10 +164,10 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       if (element.status) {
         let description = "";
         if (
-          element.status.aheadOfParent > 0 ||
-          element.status.behindParent > 0
+          element.status.aheadOfRemote > 0 ||
+          element.status.behindRemote > 0
         ) {
-          description += `${element.status.aheadOfParent}\u2193 ${element.status.behindParent}\u2191 `;
+          description += `${element.status.behindRemote}\u2193 ${element.status.aheadOfRemote}\u2191 `;
         }
 
         description += ` \u21c6  origin/${element.name}`;
