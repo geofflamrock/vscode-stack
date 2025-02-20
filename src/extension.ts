@@ -1,36 +1,65 @@
 // The module 'vscode' contains the VS Code extensibility API
 // Import the module and reference it with the alias vscode in your code below
-import * as vscode from "vscode";
-import { StackTreeDataProvider } from "./StackTreeDataProvider";
+import {
+  env,
+  ExtensionContext,
+  workspace,
+  window,
+  Disposable,
+  commands,
+  Uri,
+  version as vscodeVersion,
+  WorkspaceFolder,
+  LogOutputChannel,
+  l10n,
+  LogLevel,
+  languages,
+} from "vscode";
+import {
+  BranchTreeItem,
+  StackTreeDataProvider,
+  StackTreeItem,
+} from "./StackTreeDataProvider";
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
-export function activate(context: vscode.ExtensionContext) {
-  // Use the console to output diagnostic information (console.log) and errors (console.error)
-  // This line of code will only be executed once when your extension is activated
-  console.log('Congratulations, your extension "stack" is now active!');
-
-  // The command has been defined in the package.json file
-  // Now provide the implementation of the command with registerCommand
-  // The commandId parameter must match the command field in package.json
-  const disposable = vscode.commands.registerCommand("stack.helloWorld", () => {
-    // The code you place here will be executed every time your command is executed
-    // Display a message box to the user
-    vscode.window.showInformationMessage("Hello World from Stack!");
-  });
-
-  const rootPath =
-    vscode.workspace.workspaceFolders &&
-    vscode.workspace.workspaceFolders.length > 0
-      ? vscode.workspace.workspaceFolders[0].uri.fsPath
-      : undefined;
-
-  vscode.window.registerTreeDataProvider(
-    "stack",
-    new StackTreeDataProvider(rootPath)
+export function activate(context: ExtensionContext) {
+  const disposables: Disposable[] = [];
+  context.subscriptions.push(
+    new Disposable(() => Disposable.from(...disposables).dispose())
   );
 
-  context.subscriptions.push(disposable);
+  const logger = window.createOutputChannel("Stack", { log: true });
+  disposables.push(logger);
+
+  const rootPath =
+    workspace.workspaceFolders && workspace.workspaceFolders.length > 0
+      ? workspace.workspaceFolders[0].uri.fsPath
+      : undefined;
+
+  const stackDataProvider = new StackTreeDataProvider(rootPath, logger);
+
+  window.registerTreeDataProvider("stack", stackDataProvider);
+
+  commands.registerCommand("stack.refresh", () => stackDataProvider.refresh());
+  commands.registerCommand("stack.pull", async (stack?: StackTreeItem) => {
+    if (stack) {
+      await stackDataProvider.pull(stack);
+    }
+  });
+  commands.registerCommand("stack.push", async (stack?: StackTreeItem) => {
+    if (stack) {
+      await stackDataProvider.push(stack, false);
+    }
+  });
+  commands.registerCommand(
+    "stack.push.force",
+    async (stack?: StackTreeItem) => {
+      if (stack) {
+        await stackDataProvider.push(stack, true);
+      }
+    }
+  );
 }
 
 // This method is called when your extension is deactivated

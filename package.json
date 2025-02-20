@@ -15,8 +15,28 @@
   "contributes": {
     "commands": [
       {
-        "command": "stack.helloWorld",
-        "title": "Hello World"
+        "command": "stack.refresh",
+        "title": "Refresh",
+        "icon": "$(refresh)",
+        "category": "Stack"
+      },
+      {
+        "command": "stack.pull",
+        "title": "Pull",
+        "icon": "$(repo-pull)",
+        "category": "Stack"
+      },
+      {
+        "command": "stack.push",
+        "title": "Push",
+        "icon": "$(repo-push)",
+        "category": "Stack"
+      },
+      {
+        "command": "stack.push.force",
+        "title": "Push (Force)",
+        "icon": "$(repo-push)",
+        "category": "Stack"
       }
     ],
     "views": {
@@ -24,7 +44,33 @@
         {
           "id": "stack",
           "name": "Stacks",
-          "when": "scmProvider == git"
+          "when": "git.state == initialized"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "stack.refresh",
+          "when": "view == stack",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "stack.pull",
+          "when": "viewItem == stack",
+          "group": "remote"
+        },
+        {
+          "command": "stack.push",
+          "when": "viewItem == stack",
+          "group": "remote"
+        },
+        {
+          "command": "stack.push.force",
+          "when": "viewItem == stack",
+          "group": "remote"
         }
       ]
     }
@@ -40,6 +86,7 @@
   "devDependencies": {
     "@types/mocha": "^10.0.10",
     "@types/node": "20.x",
+    "@types/pluralize": "^0.0.33",
     "@types/vscode": "^1.97.0",
     "@typescript-eslint/eslint-plugin": "^8.22.0",
     "@typescript-eslint/parser": "^8.22.0",
@@ -47,5 +94,8 @@
     "@vscode/test-electron": "^2.4.1",
     "eslint": "^9.19.0",
     "typescript": "^5.7.3"
+  },
+  "dependencies": {
+    "pluralize": "^8.0.0"
   }
 }
