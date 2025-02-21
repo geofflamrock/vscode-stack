@@ -663,20 +663,6 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       });
     } else {
       if (element.type === "stack") {
-        const branches: BranchTreeItem[] = element.stack.branches.map(
-          (name) => {
-            const branchStatus = element.stack.status.branches[name];
-            return {
-              type: "branch",
-              stack: element.stack,
-              name: name,
-              detail: branchStatus,
-            };
-          }
-        );
-
-        return branches;
-      } else if (element.type === "branch") {
         const stackStatus = await this.execJson<Stack[]>(
           `stack status --stack "${element.stack.name}" --json --full --working-dir "${this.workspaceRoot}"`,
           false
@@ -687,33 +673,40 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
         }
 
         const stackDetails = stackStatus[0];
-        const branchDetails = stackDetails.status.branches[element.name];
 
-        if (!branchDetails) {
-          return [];
-        }
+        const branches: BranchTreeItem[] = stackDetails.branches.map((name) => {
+          const branchStatus = stackDetails.status.branches[name];
+          return {
+            type: "branch",
+            stack: element.stack,
+            name: name,
+            detail: branchStatus,
+          };
+        });
 
+        return branches;
+      } else if (element.type === "branch") {
         // Get the previous branch in the stack
-        const branches = stackDetails.branches;
+        const branches = element.stack.branches;
         const branchIndex = branches.indexOf(element.name);
         const parentBranch =
           branchIndex > 0
             ? branches[branchIndex - 1]
-            : stackDetails.sourceBranch;
+            : element.stack.sourceBranch;
 
         const branchParentStatusTreeItem: BranchParentStatusTreeItem = {
           type: "branchParentStatus",
           parentBranchName: parentBranch,
-          aheadOfParent: branchDetails.status.aheadOfParent || 0,
-          behindParent: branchDetails.status.behindParent || 0,
+          aheadOfParent: element.detail?.status.aheadOfParent || 0,
+          behindParent: element.detail?.status.behindParent || 0,
         };
 
         const treeItems: StackTreeData[] = [branchParentStatusTreeItem];
 
-        if (branchDetails.pullRequest) {
+        if (element.detail?.pullRequest) {
           treeItems.push({
             type: "pullRequest",
-            pullRequest: branchDetails.pullRequest,
+            pullRequest: element.detail.pullRequest,
           });
         }
 
