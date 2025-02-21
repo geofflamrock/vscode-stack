@@ -6,6 +6,8 @@ import {
   EventEmitter,
   LogOutputChannel,
   ProgressLocation,
+  QuickPickItem,
+  QuickPickItemKind,
   ThemeIcon,
   TreeDataProvider,
   TreeItem,
@@ -77,12 +79,108 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     this._onDidChangeTreeData.fire();
   }
 
+  async new(): Promise<void> {
+    if (!this.workspaceRoot) {
+      return;
+    }
+    const stackName = await window.showInputBox({ prompt: "Enter stack name" });
+
+    if (!stackName) {
+      return;
+    }
+
+    const branchesOrderedByCommitterDate =
+      await this.getBranchesByCommitterDate(this.workspaceRoot);
+
+    const sourceBranch = await window.showQuickPick(
+      branchesOrderedByCommitterDate,
+      {
+        placeHolder: "Select source branch",
+      }
+    );
+
+    if (!sourceBranch) {
+      return;
+    }
+
+    const createNewBranchQuickPickItem: QuickPickItem = {
+      label: "Create new branch",
+      iconPath: new ThemeIcon("plus"),
+    };
+    const noNewBranchQuickPickItem: QuickPickItem = {
+      label: "Do not create new branch",
+      iconPath: new ThemeIcon("circle-slash"),
+    };
+    const separatorQuickPickItem: QuickPickItem = {
+      label: "",
+      kind: QuickPickItemKind.Separator,
+    };
+    const existingBranchesQuickPickItems: QuickPickItem[] =
+      branchesOrderedByCommitterDate.map((branch) => ({
+        label: branch,
+        iconPath: new ThemeIcon("git-branch"),
+      }));
+
+    const branchNameSelection = await window.showQuickPick(
+      [
+        createNewBranchQuickPickItem,
+        noNewBranchQuickPickItem,
+        separatorQuickPickItem,
+        ...existingBranchesQuickPickItems,
+      ],
+      {
+        placeHolder: "Create or select a branch to add to the stack",
+      }
+    );
+
+    if (branchNameSelection === undefined) {
+      return;
+    }
+
+    let branchName: string | undefined = undefined;
+
+    if (branchNameSelection === createNewBranchQuickPickItem) {
+      branchName = await window.showInputBox({
+        prompt: "Enter new branch name",
+      });
+
+      if (!branchName) {
+        return;
+      }
+    } else if (branchNameSelection !== noNewBranchQuickPickItem) {
+      branchName = branchNameSelection.label;
+    }
+
+    await window.withProgress(
+      {
+        location: ProgressLocation.Notification,
+        title: `Creating stack '${stackName}'`,
+        cancellable: false,
+      },
+      async () => {
+        try {
+          let cmd = `stack new --name "${stackName}" --source-branch "${sourceBranch}" --working-dir "${this.workspaceRoot}" --yes`;
+
+          if (branchName) {
+            cmd += ` --branch ${branchName}`;
+          }
+          await this.exec(cmd);
+        } catch (err) {
+          window.showErrorMessage(`Error creating stack: ${err}`);
+          throw err;
+        }
+      }
+    );
+
+    this.refresh();
+  }
+
   async pull(stack: StackTreeItem): Promise<void> {
     if (!this.workspaceRoot) {
       window.showInformationMessage("No stack in empty workspace");
       return;
     }
-    window.withProgress(
+    await window.withProgress(
       {
         location: ProgressLocation.Notification,
         title: `Pulling changes for stack '${stack.stack.name}'`,
@@ -91,7 +189,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       async () => {
         try {
           await this.exec(
-            `stack pull --stack ${stack.stack.name} --working-dir ${this.workspaceRoot}`
+            `stack pull --stack "${stack.stack.name}" --working-dir "${this.workspaceRoot}"`
           );
         } catch (err) {
           window.showErrorMessage(`Error pulling changes: ${err}`);
@@ -105,7 +203,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       window.showInformationMessage("No stack in empty workspace");
       return;
     }
-    window.withProgress(
+    await window.withProgress(
       {
         location: ProgressLocation.Notification,
         title: `Pushing changes for stack '${stack.stack.name}'`,
@@ -114,12 +212,89 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       async () => {
         try {
           await this.exec(
-            `stack push --stack ${stack.stack.name} --working-dir ${
+            `stack push --stack "${stack.stack.name}" --working-dir "${
               this.workspaceRoot
-            } ${forceWithLease ? "--force-with-lease" : ""}`
+            }" ${forceWithLease ? "--force-with-lease" : ""}`
           );
         } catch (err) {
           window.showErrorMessage(`Error pushing changes: ${err}`);
+        }
+      }
+    );
+  }
+
+  async delete(stack: StackTreeItem): Promise<void> {
+    if (!this.workspaceRoot) {
+      window.showInformationMessage("No stack in empty workspace");
+      return;
+    }
+
+    const deleteStack: QuickPickItem = {
+      label: "Delete Stack",
+      detail:
+        "Will delete the stack and any branches which are no longer on the remote",
+    };
+
+    const separator: QuickPickItem = {
+      label: "",
+      kind: QuickPickItemKind.Separator,
+    };
+
+    const cancel: QuickPickItem = {
+      label: "Cancel",
+    };
+
+    const confirm = await window.showQuickPick(
+      [deleteStack, separator, cancel],
+      {
+        placeHolder: `Are you sure you want to delete stack '${stack.stack.name}'?`,
+        title: "Confirm delete stack",
+      }
+    );
+
+    if (confirm !== deleteStack) {
+      return;
+    }
+
+    await window.withProgress(
+      {
+        location: ProgressLocation.Notification,
+        title: `Deleting stack '${stack.stack.name}'`,
+        cancellable: false,
+      },
+      async () => {
+        try {
+          await this.exec(
+            `stack delete --stack "${stack.stack.name}" --working-dir "${this.workspaceRoot}" --yes`
+          );
+        } catch (err) {
+          window.showErrorMessage(`Error deleting stack: ${err}`);
+          throw err;
+        }
+      }
+    );
+
+    this.refresh();
+  }
+
+  async switchTo(branch: BranchTreeItem): Promise<void> {
+    if (!this.workspaceRoot) {
+      window.showInformationMessage("No stack in empty workspace");
+      return;
+    }
+    await window.withProgress(
+      {
+        location: ProgressLocation.Notification,
+        title: `Switching to branch '${branch.name}'`,
+        cancellable: false,
+      },
+      async () => {
+        try {
+          await this.exec(
+            `stack switch --branch "${branch.name}" --working-dir "${this.workspaceRoot}"`
+          );
+        } catch (err) {
+          window.showErrorMessage(`Error switching to branch: ${err}`);
         }
       }
     );
@@ -181,13 +356,12 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
 
   async getChildren(element?: StackTreeData): Promise<StackTreeData[]> {
     if (!this.workspaceRoot) {
-      window.showInformationMessage("No stack in empty workspace");
       return [];
     }
 
     if (!element) {
       const stacks = await this.execJson<Stack[]>(
-        `stack status --all --json --working-dir ${this.workspaceRoot}`,
+        `stack status --all --json --working-dir "${this.workspaceRoot}"`,
         false
       );
 
@@ -217,10 +391,14 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     return [];
   }
 
-  private exec(cmd: string, log: boolean = true): Promise<string> {
+  private exec(
+    cmd: string,
+    log: boolean = true,
+    cwd?: string
+  ): Promise<string> {
     return new Promise<string>((resolve, reject) => {
       this.logger.info(cmd);
-      cp.exec(cmd, (err, out) => {
+      cp.exec(cmd, { cwd }, (err, out) => {
         if (err) {
           return reject(err);
         }
@@ -232,48 +410,21 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     });
   }
 
-  private async execJson<T>(cmd: string, log: boolean = true): Promise<T> {
+  private async execJson<T>(
+    cmd: string,
+    log: boolean = true,
+    cwd?: string
+  ): Promise<T> {
     const out = await this.exec(cmd, log);
     return JSON.parse(out.replaceAll(EOL, ""));
   }
+
+  private async getBranchesByCommitterDate(cwd?: string): Promise<string[]> {
+    const branches = await this.exec(
+      `git branch --list --format=%(refname:short) --sort=-committerdate`,
+      false,
+      cwd
+    );
+    return branches.split("\n").filter((branch) => branch.length > 0);
+  }
 }
-
-// class StackTreeItemBase extends vscode.TreeItem {
-//   constructor(
-//     public readonly name: string,
-//     public readonly description: string,
-//     public readonly icon: vscode.ThemeIcon,
-//     public readonly collapsibleState: vscode.TreeItemCollapsibleState
-//   ) {
-//     super(name, collapsibleState);
-//     this.tooltip = `${this.name}`;
-//     this.description = this.description;
-//     this.iconPath = this.icon;
-//   }
-// }
-
-// class StackTreeItem extends StackTreeItemBase {
-//   constructor(
-//     public readonly stack: Stack,
-//     public readonly collapsibleState: vscode.TreeItemCollapsibleState
-//   ) {
-//     super(
-//       stack.name,
-//       `${stack.sourceBranch} (${stack.branches.length} ${pluralize(
-//         "branch",
-//         stack.branches.length
-//       )})`,
-//       new vscode.ThemeIcon("layers"),
-//       collapsibleState
-//     );
-//   }
-// }
-
-// class BranchTreeItem extends StackTreeItemBase {
-//   constructor(
-//     public readonly branch: string,
-//     public readonly collapsibleState: vscode.TreeItemCollapsibleState
-//   ) {
-//     super(branch, "", new vscode.ThemeIcon("git-branch"), collapsibleState);
-//   }
-// }

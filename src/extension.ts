@@ -42,6 +42,7 @@ export function activate(context: ExtensionContext) {
   window.registerTreeDataProvider("stack", stackDataProvider);
 
   commands.registerCommand("stack.refresh", () => stackDataProvider.refresh());
+  commands.registerCommand("stack.new", () => stackDataProvider.new());
   commands.registerCommand("stack.pull", async (stack?: StackTreeItem) => {
     if (stack) {
       await stackDataProvider.pull(stack);
@@ -49,17 +50,21 @@ export function activate(context: ExtensionContext) {
   });
   commands.registerCommand("stack.push", async (stack?: StackTreeItem) => {
     if (stack) {
-      await stackDataProvider.push(stack, false);
+      await stackDataProvider.push(stack, true);
     }
   });
-  commands.registerCommand(
-    "stack.push.force",
-    async (stack?: StackTreeItem) => {
-      if (stack) {
-        await stackDataProvider.push(stack, true);
-      }
+
+  commands.registerCommand("stack.delete", async (stack?: StackTreeItem) => {
+    if (stack) {
+      await stackDataProvider.delete(stack);
     }
-  );
+  });
+
+  commands.registerCommand("stack.switch", async (branch?: BranchTreeItem) => {
+    if (branch) {
+      await stackDataProvider.switchTo(branch);
+    }
+  });
 }
 
 // This method is called when your extension is deactivated

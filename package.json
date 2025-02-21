@@ -15,6 +15,12 @@
   "contributes": {
     "commands": [
       {
+        "command": "stack.new",
+        "title": "New Stack",
+        "icon": "$(add)",
+        "category": "Stack"
+      },
+      {
         "command": "stack.refresh",
         "title": "Refresh",
         "icon": "$(refresh)",
@@ -33,9 +39,15 @@
         "category": "Stack"
       },
       {
-        "command": "stack.push.force",
-        "title": "Push (Force)",
-        "icon": "$(repo-push)",
+        "command": "stack.delete",
+        "title": "Delete",
+        "icon": "$(trash)",
+        "category": "Stack"
+      },
+      {
+        "command": "stack.switch",
+        "title": "Switch to branch",
+        "icon": "$(live-share)",
         "category": "Stack"
       }
     ],
@@ -44,12 +56,17 @@
         {
           "id": "stack",
           "name": "Stacks",
-          "when": "git.state == initialized"
+          "when": "workspaceFolderCount > 0 && git.state == initialized"
         }
       ]
     },
     "menus": {
       "view/title": [
+        {
+          "command": "stack.new",
+          "when": "view == stack",
+          "group": "navigation"
+        },
         {
           "command": "stack.refresh",
           "when": "view == stack",
@@ -60,17 +77,21 @@
         {
           "command": "stack.pull",
           "when": "viewItem == stack",
-          "group": "remote"
+          "group": "inline"
         },
         {
           "command": "stack.push",
           "when": "viewItem == stack",
-          "group": "remote"
+          "group": "inline"
         },
         {
-          "command": "stack.push.force",
-          "when": "viewItem == stack",
-          "group": "remote"
+          "command": "stack.delete",
+          "when": "viewItem == stack"
+        },
+        {
+          "command": "stack.switch",
+          "when": "viewItem == branch",
+          "group": "inline"
         }
       ]
     }
