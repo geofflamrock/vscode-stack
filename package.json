@@ -39,15 +39,45 @@
         "category": "Stack"
       },
       {
+        "command": "stack.branch.new",
+        "title": "Create or Add Branch to Stack",
+        "icon": "$(git-branch-create)",
+        "category": "Stack"
+      },
+      {
+        "command": "stack.sync",
+        "title": "Sync Stack with Remote",
+        "icon": "$(sync)",
+        "category": "Stack"
+      },
+      {
+        "command": "stack.cleanup",
+        "title": "Cleanup Stack",
+        "icon": "$(clear-all)",
+        "category": "Stack"
+      },
+      {
         "command": "stack.delete",
-        "title": "Delete",
+        "title": "Delete Stack",
         "icon": "$(trash)",
         "category": "Stack"
       },
       {
         "command": "stack.switch",
-        "title": "Switch to branch",
+        "title": "Switch to Branch",
         "icon": "$(live-share)",
+        "category": "Stack"
+      },
+      {
+        "command": "stack.branch.remove",
+        "title": "Remove Branch from Stack",
+        "icon": "$(remove)",
+        "category": "Stack"
+      },
+      {
+        "command": "stack.pr.open",
+        "title": "Open Pull Request",
+        "icon": "$(globe)",
         "category": "Stack"
       }
     ],
@@ -75,22 +105,47 @@
       ],
       "view/item/context": [
         {
+          "command": "stack.branch.new",
+          "when": "viewItem == stack",
+          "group": "inline@2"
+        },
+        {
+          "command": "stack.sync",
+          "when": "viewItem == stack",
+          "group": "inline@1"
+        },
+        {
           "command": "stack.pull",
           "when": "viewItem == stack",
-          "group": "inline"
+          "group": "stackGroup1"
         },
         {
           "command": "stack.push",
           "when": "viewItem == stack",
-          "group": "inline"
+          "group": "stackGroup1"
+        },
+        {
+          "command": "stack.cleanup",
+          "when": "viewItem == stack",
+          "group": "stackGroup2"
         },
         {
           "command": "stack.delete",
-          "when": "viewItem == stack"
+          "when": "viewItem == stack",
+          "group": "stackGroup3"
         },
         {
           "command": "stack.switch",
           "when": "viewItem == branch",
+          "group": "inline"
+        },
+        {
+          "command": "stack.branch.remove",
+          "when": "viewItem == branch"
+        },
+        {
+          "command": "stack.pr.open",
+          "when": "viewItem == pullRequest",
           "group": "inline"
         }
       ]

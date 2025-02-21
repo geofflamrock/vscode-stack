@@ -2,6 +2,7 @@ import * as cp from "child_process";
 import { EOL } from "os";
 import pluralize from "pluralize";
 import {
+  commands,
   Event,
   EventEmitter,
   LogOutputChannel,
@@ -26,12 +27,20 @@ type StackStatus = {
   branches: StackBranchStatus;
 };
 
+type GitHubPullRequest = {
+  number: number;
+  title: string;
+  url: string;
+  isDraft: boolean;
+};
+
 type StackBranchStatus = {
   [name: string]: BranchDetail;
 };
 
 type BranchDetail = {
   status: BranchStatus;
+  pullRequest?: GitHubPullRequest;
 };
 
 type BranchStatus = {
@@ -57,11 +66,34 @@ export type StackTreeItem = {
 
 export type BranchTreeItem = {
   type: "branch";
+  stack: Stack;
   name: string;
-  status?: BranchStatus;
+  detail?: BranchDetail;
 };
 
-export type StackTreeData = StackTreeItem | BranchTreeItem;
+export type BranchParentStatusTreeItem = {
+  type: "branchParentStatus";
+  parentBranchName: string;
+  aheadOfParent: number;
+  behindParent: number;
+};
+
+export type PullRequestTreeItem = {
+  type: "pullRequest";
+  pullRequest: GitHubPullRequest;
+};
+
+export type StackTreeData =
+  | StackTreeItem
+  | BranchTreeItem
+  | BranchParentStatusTreeItem
+  | PullRequestTreeItem;
+
+const enum GlyphChars {
+  ArrowDown = "\u2193",
+  ArrowUp = "\u2191",
+  ArrowLeftRight = "\u21c6",
+}
 
 export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   constructor(
@@ -79,7 +111,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     this._onDidChangeTreeData.fire();
   }
 
-  async new(): Promise<void> {
+  async newStack(): Promise<void> {
     if (!this.workspaceRoot) {
       return;
     }
@@ -175,6 +207,141 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     this.refresh();
   }
 
+  async newBranch(stack: StackTreeItem): Promise<void> {
+    if (!this.workspaceRoot) {
+      return;
+    }
+
+    const branchesOrderedByCommitterDate =
+      await this.getBranchesByCommitterDate(this.workspaceRoot);
+
+    const createNewBranchQuickPickItem: QuickPickItem = {
+      label: "Create new branch",
+      iconPath: new ThemeIcon("plus"),
+    };
+    const separatorQuickPickItem: QuickPickItem = {
+      label: "",
+      kind: QuickPickItemKind.Separator,
+    };
+    const existingBranchesQuickPickItems: QuickPickItem[] =
+      branchesOrderedByCommitterDate.map((branch) => ({
+        label: branch,
+        iconPath: new ThemeIcon("git-branch"),
+      }));
+
+    const branchNameSelection = await window.showQuickPick(
+      [
+        createNewBranchQuickPickItem,
+        separatorQuickPickItem,
+        ...existingBranchesQuickPickItems,
+      ],
+      {
+        placeHolder: "Create or select a branch to add to the stack",
+      }
+    );
+
+    if (branchNameSelection === undefined) {
+      return;
+    }
+
+    let branchName: string | undefined = undefined;
+
+    if (branchNameSelection === createNewBranchQuickPickItem) {
+      branchName = await window.showInputBox({
+        prompt: "Enter new branch name",
+      });
+
+      if (!branchName) {
+        return;
+      }
+
+      await window.withProgress(
+        {
+          location: ProgressLocation.Notification,
+          title: `Creating new branch '${branchName}' in stack '${stack.stack.name}'`,
+          cancellable: false,
+        },
+        async () => {
+          try {
+            let cmd = `stack branch new --stack "${stack.stack.name}" --name "${branchName}" --working-dir "${this.workspaceRoot}" --yes`;
+            await this.exec(cmd);
+          } catch (err) {
+            window.showErrorMessage(`Error creating branch in stack: ${err}`);
+            throw err;
+          }
+        }
+      );
+    } else {
+      branchName = branchNameSelection.label;
+
+      await window.withProgress(
+        {
+          location: ProgressLocation.Notification,
+          title: `Adding branch '${branchName}' to stack '${stack.stack.name}'`,
+          cancellable: false,
+        },
+        async () => {
+          try {
+            let cmd = `stack branch add --stack "${stack.stack.name}" --name "${branchName}" --working-dir "${this.workspaceRoot}" --yes`;
+            await this.exec(cmd);
+          } catch (err) {
+            window.showErrorMessage(`Error adding branch to stack: ${err}`);
+            throw err;
+          }
+        }
+      );
+    }
+
+    this.refresh();
+  }
+
+  async sync(stack: StackTreeItem): Promise<void> {
+    if (!this.workspaceRoot) {
+      return;
+    }
+
+    const syncStack: QuickPickItem = {
+      label: "Sync Stack",
+      detail:
+        "Will fetch the latest changes from the remote, update the stack and push commits back to the remote",
+    };
+
+    const separator: QuickPickItem = {
+      label: "",
+      kind: QuickPickItemKind.Separator,
+    };
+
+    const cancel: QuickPickItem = {
+      label: "Cancel",
+    };
+
+    const confirm = await window.showQuickPick([syncStack, separator, cancel], {
+      placeHolder: `Are you sure you want to sync stack '${stack.stack.name}'?`,
+      title: "Confirm Sync Stack",
+    });
+
+    if (confirm !== syncStack) {
+      return;
+    }
+
+    await window.withProgress(
+      {
+        location: ProgressLocation.Notification,
+        title: `Syncing stack '${stack.stack.name}' with remote`,
+        cancellable: false,
+      },
+      async () => {
+        try {
+          await this.exec(
+            `stack sync --stack "${stack.stack.name}" --working-dir "${this.workspaceRoot}" --yes`
+          );
+        } catch (err) {
+          window.showErrorMessage(`Error syncing changes: ${err}`);
+        }
+      }
+    );
+  }
+
   async pull(stack: StackTreeItem): Promise<void> {
     if (!this.workspaceRoot) {
       window.showInformationMessage("No stack in empty workspace");
@@ -248,7 +415,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       [deleteStack, separator, cancel],
       {
         placeHolder: `Are you sure you want to delete stack '${stack.stack.name}'?`,
-        title: "Confirm delete stack",
+        title: "Confirm Delete Stack",
       }
     );
 
@@ -277,11 +444,64 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     this.refresh();
   }
 
+  async cleanup(stack: StackTreeItem): Promise<void> {
+    if (!this.workspaceRoot) {
+      return;
+    }
+
+    const cleanupStack: QuickPickItem = {
+      label: "Cleanup Stack",
+      detail: "Will delete any branches which are no longer on the remote",
+    };
+
+    const separator: QuickPickItem = {
+      label: "",
+      kind: QuickPickItemKind.Separator,
+    };
+
+    const cancel: QuickPickItem = {
+      label: "Cancel",
+    };
+
+    const confirm = await window.showQuickPick(
+      [cleanupStack, separator, cancel],
+      {
+        placeHolder: `Are you sure you want to cleanup stack '${stack.stack.name}'?`,
+        title: "Confirm Cleanup Stack",
+      }
+    );
+
+    if (confirm !== cleanupStack) {
+      return;
+    }
+
+    await window.withProgress(
+      {
+        location: ProgressLocation.Notification,
+        title: `Cleaning up stack '${stack.stack.name}'`,
+        cancellable: false,
+      },
+      async () => {
+        try {
+          await this.exec(
+            `stack cleanup --stack "${stack.stack.name}" --working-dir "${this.workspaceRoot}" --yes`
+          );
+        } catch (err) {
+          window.showErrorMessage(`Error cleaning up stack: ${err}`);
+          throw err;
+        }
+      }
+    );
+
+    this.refresh();
+  }
+
   async switchTo(branch: BranchTreeItem): Promise<void> {
     if (!this.workspaceRoot) {
       window.showInformationMessage("No stack in empty workspace");
       return;
     }
+
     await window.withProgress(
       {
         location: ProgressLocation.Notification,
@@ -298,6 +518,61 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
         }
       }
     );
+  }
+
+  async removeBranchFromStack(branch: BranchTreeItem): Promise<void> {
+    if (!this.workspaceRoot) {
+      return;
+    }
+
+    const removeBranchFromStack: QuickPickItem = {
+      label: "Remove Branch",
+      detail: "The branch will not be deleted, only removed from the stack.",
+    };
+
+    const separator: QuickPickItem = {
+      label: "",
+      kind: QuickPickItemKind.Separator,
+    };
+
+    const cancel: QuickPickItem = {
+      label: "Cancel",
+    };
+
+    const confirm = await window.showQuickPick(
+      [removeBranchFromStack, separator, cancel],
+      {
+        placeHolder: `Are you sure you want to remove branch '${branch.name}' from stack '${branch.stack.name}'?`,
+        title: "Confirm Remove Branch",
+      }
+    );
+
+    if (confirm !== removeBranchFromStack) {
+      return;
+    }
+
+    await window.withProgress(
+      {
+        location: ProgressLocation.Notification,
+        title: `Removing branch '${branch.name}' from stack '${branch.stack.name}'`,
+        cancellable: false,
+      },
+      async () => {
+        try {
+          await this.exec(
+            `stack branch remove --stack "${branch.stack.name}" --name "${branch.name}" --working-dir "${this.workspaceRoot}" --yes`
+          );
+        } catch (err) {
+          window.showErrorMessage(`Error switching to branch: ${err}`);
+        }
+      }
+    );
+
+    this.refresh();
+  }
+
+  openPullRequest(pullRequest: PullRequestTreeItem): void {
+    commands.executeCommand("vscode.open", pullRequest.pullRequest.url);
   }
 
   getTreeItem(element: StackTreeData): TreeItem {
@@ -317,9 +592,9 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
           sourceBranchDetails.status.aheadOfRemote > 0 ||
           sourceBranchDetails.status.behindRemote > 0
         ) {
-          description += `  ${sourceBranchDetails.status.behindRemote}\u2193 ${sourceBranchDetails.status.aheadOfRemote}\u2191`;
+          description += `  ${sourceBranchDetails.status.behindRemote}${GlyphChars.ArrowDown} ${sourceBranchDetails.status.aheadOfRemote}${GlyphChars.ArrowUp}`;
         }
-        description += `  \u21c6  origin/${element.stack.sourceBranch}`;
+        description += `  ${GlyphChars.ArrowLeftRight}  origin/${element.stack.sourceBranch}`;
       }
 
       description += ` (${element.stack.branches.length} ${pluralize(
@@ -332,23 +607,38 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     } else if (element.type === "branch") {
       const branchTreeItem = new TreeItem(
         element.name,
-        TreeItemCollapsibleState.None
+        TreeItemCollapsibleState.Collapsed
       );
       branchTreeItem.iconPath = new ThemeIcon("git-branch");
       branchTreeItem.contextValue = "branch";
-      if (element.status) {
+      if (element.detail) {
         let description = "";
         if (
-          element.status.aheadOfRemote > 0 ||
-          element.status.behindRemote > 0
+          element.detail.status.aheadOfRemote > 0 ||
+          element.detail.status.behindRemote > 0
         ) {
-          description += `${element.status.behindRemote}\u2193 ${element.status.aheadOfRemote}\u2191 `;
+          description += `${element.detail.status.behindRemote}${GlyphChars.ArrowDown} ${element.detail.status.aheadOfRemote}${GlyphChars.ArrowUp} `;
         }
 
-        description += ` \u21c6  origin/${element.name}`;
+        description += ` ${GlyphChars.ArrowLeftRight}  origin/${element.name}`;
         branchTreeItem.description = description;
       }
       return branchTreeItem;
+    } else if (element.type === "branchParentStatus") {
+      const branchParentStatusTreeItem = new TreeItem(
+        `${element.aheadOfParent} ahead, ${element.behindParent} behind ${element.parentBranchName}`,
+        TreeItemCollapsibleState.None
+      );
+      branchParentStatusTreeItem.iconPath = new ThemeIcon("arrow-swap");
+      return branchParentStatusTreeItem;
+    } else if (element.type === "pullRequest") {
+      const pullRequestTreeItem = new TreeItem(
+        `#${element.pullRequest.number}: ${element.pullRequest.title}`,
+        TreeItemCollapsibleState.None
+      );
+      pullRequestTreeItem.contextValue = "pullRequest";
+      pullRequestTreeItem.iconPath = new ThemeIcon("git-pull-request");
+      return pullRequestTreeItem;
     }
 
     return new TreeItem("Unknown");
@@ -378,13 +668,56 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
             const branchStatus = element.stack.status.branches[name];
             return {
               type: "branch",
+              stack: element.stack,
               name: name,
-              status: branchStatus ? branchStatus.status : undefined,
+              detail: branchStatus,
             };
           }
         );
 
         return branches;
+      } else if (element.type === "branch") {
+        const stackStatus = await this.execJson<Stack[]>(
+          `stack status --stack "${element.stack.name}" --json --full --working-dir "${this.workspaceRoot}"`,
+          false
+        );
+
+        if (stackStatus.length !== 1) {
+          return [];
+        }
+
+        const stackDetails = stackStatus[0];
+        const branchDetails = stackDetails.status.branches[element.name];
+
+        if (!branchDetails) {
+          return [];
+        }
+
+        // Get the previous branch in the stack
+        const branches = stackDetails.branches;
+        const branchIndex = branches.indexOf(element.name);
+        const parentBranch =
+          branchIndex > 0
+            ? branches[branchIndex - 1]
+            : stackDetails.sourceBranch;
+
+        const branchParentStatusTreeItem: BranchParentStatusTreeItem = {
+          type: "branchParentStatus",
+          parentBranchName: parentBranch,
+          aheadOfParent: branchDetails.status.aheadOfParent || 0,
+          behindParent: branchDetails.status.behindParent || 0,
+        };
+
+        const treeItems: StackTreeData[] = [branchParentStatusTreeItem];
+
+        if (branchDetails.pullRequest) {
+          treeItems.push({
+            type: "pullRequest",
+            pullRequest: branchDetails.pullRequest,
+          });
+        }
+
+        return treeItems;
       }
     }
 
