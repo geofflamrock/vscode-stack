@@ -51,6 +51,12 @@
         "category": "Stack"
       },
       {
+        "command": "stack.update",
+        "title": "Update Stack (local)",
+        "icon": "$(sync)",
+        "category": "Stack"
+      },
+      {
         "command": "stack.cleanup",
         "title": "Cleanup Stack",
         "icon": "$(clear-all)",
@@ -123,6 +129,11 @@
           "command": "stack.push",
           "when": "viewItem == stack",
           "group": "stackGroup1"
+        },
+        {
+          "command": "stack.update",
+          "when": "viewItem == stack",
+          "group": "stackGroup2"
         },
         {
           "command": "stack.cleanup",

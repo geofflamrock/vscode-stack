@@ -37,6 +37,11 @@ export function activate(context: ExtensionContext) {
       await stackDataProvider.sync(stack);
     }
   });
+  commands.registerCommand("stack.update", async (stack?: StackTreeItem) => {
+    if (stack) {
+      await stackDataProvider.update(stack);
+    }
+  });
   commands.registerCommand("stack.new", () => stackDataProvider.newStack());
   commands.registerCommand("stack.pull", async (stack?: StackTreeItem) => {
     if (stack) {
