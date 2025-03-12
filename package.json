@@ -4,6 +4,10 @@
   "publisher": "geofflamrock",
   "description": "",
   "version": "0.0.1",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/geofflamrock/vscode-stack"
+  },
   "engines": {
     "vscode": "^1.97.0"
   },
@@ -92,6 +96,7 @@
         {
           "id": "stack",
           "name": "Stacks",
+          "icon": "$(layers)",
           "when": "workspaceFolderCount > 0 && git.state == initialized"
         }
       ]
@@ -110,6 +115,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "stack.switch",
+          "when": "viewItem == stack",
+          "group": "inline@3"
+        },
         {
           "command": "stack.branch.new",
           "when": "viewItem == stack",

@@ -74,11 +74,20 @@ export function activate(context: ExtensionContext) {
     }
   });
 
-  commands.registerCommand("stack.switch", async (branch?: BranchTreeItem) => {
-    if (branch) {
-      await stackDataProvider.switchTo(branch);
+  commands.registerCommand(
+    "stack.switch",
+    async (branchOrStack?: StackTreeItem | BranchTreeItem) => {
+      if (branchOrStack) {
+        if (branchOrStack.type === "stack") {
+          await stackDataProvider.switchTo(
+            branchOrStack.stack.sourceBranch.name
+          );
+        } else if (branchOrStack.type === "branch") {
+          await stackDataProvider.switchTo(branchOrStack.branch.name);
+        }
+      }
     }
-  });
+  );
 
   commands.registerCommand(
     "stack.branch.remove",

@@ -585,7 +585,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     this.refresh();
   }
 
-  async switchTo(branch: BranchTreeItem): Promise<void> {
+  async switchTo(branch: string): Promise<void> {
     if (!this.workspaceRoot) {
       window.showInformationMessage("No stack in empty workspace");
       return;
@@ -594,13 +594,13 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     await window.withProgress(
       {
         location: ProgressLocation.Notification,
-        title: `Switching to branch '${branch.branch.name}'`,
+        title: `Switching to branch '${branch}'`,
         cancellable: false,
       },
       async () => {
         try {
           await this.exec(
-            `stack switch --branch "${branch.branch.name}" --working-dir "${this.workspaceRoot}"`
+            `stack switch --branch "${branch}" --working-dir "${this.workspaceRoot}"`
           );
         } catch (err) {
           window.showErrorMessage(`Error switching to branch: ${err}`);
@@ -698,7 +698,9 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       );
       branchTreeItem.iconPath = new ThemeIcon("git-branch");
       branchTreeItem.contextValue = "branch";
-      if (element.branch.remoteTrackingBranch) {
+      if (!element.branch.exists) {
+        branchTreeItem.description = "(deleted)";
+      } else if (element.branch.remoteTrackingBranch) {
         let description = "";
         if (
           element.branch.remoteTrackingBranch.ahead > 0 ||
