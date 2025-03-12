@@ -173,7 +173,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       iconPath: new ThemeIcon("plus"),
     };
     const noNewBranchQuickPickItem: QuickPickItem = {
-      label: "Do not create new branch",
+      label: "Do not create or add a branch",
       iconPath: new ThemeIcon("circle-slash"),
     };
     const separatorQuickPickItem: QuickPickItem = {
@@ -224,7 +224,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          let cmd = `stack new --name "${stackName}" --source-branch "${sourceBranch}" --working-dir "${this.workspaceRoot}" --yes`;
+          let cmd = `stack new --name "${stackName}" --source-branch "${sourceBranch}" --working-dir "${this.workspaceRoot}"`;
 
           if (branchName) {
             cmd += ` --branch ${branchName}`;
@@ -296,7 +296,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
         },
         async () => {
           try {
-            let cmd = `stack branch new --stack "${stack.stack.name}" --name "${branchName}" --working-dir "${this.workspaceRoot}" --yes`;
+            let cmd = `stack branch new --stack "${stack.stack.name}" --name "${branchName}" --working-dir "${this.workspaceRoot}"`;
             await this.exec(cmd);
           } catch (err) {
             window.showErrorMessage(`Error creating branch in stack: ${err}`);
@@ -315,7 +315,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
         },
         async () => {
           try {
-            let cmd = `stack branch add --stack "${stack.stack.name}" --name "${branchName}" --working-dir "${this.workspaceRoot}" --yes`;
+            let cmd = `stack branch add --stack "${stack.stack.name}" --name "${branchName}" --working-dir "${this.workspaceRoot}"`;
             await this.exec(cmd);
           } catch (err) {
             window.showErrorMessage(`Error adding branch to stack: ${err}`);
@@ -368,6 +368,8 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
           await this.exec(
             `stack sync --stack "${stack.stack.name}" --working-dir "${this.workspaceRoot}" --yes`
           );
+
+          this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error syncing changes: ${err}`);
         }
@@ -441,6 +443,8 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
           await this.exec(
             `stack pull --stack "${stack.stack.name}" --working-dir "${this.workspaceRoot}"`
           );
+
+          this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error pulling changes: ${err}`);
         }
@@ -466,6 +470,8 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
               this.workspaceRoot
             }" ${forceWithLease ? "--force-with-lease" : ""}`
           );
+
+          this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error pushing changes: ${err}`);
         }
@@ -820,14 +826,18 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   ): Promise<string> {
     return new Promise<string>((resolve, reject) => {
       this.logger.info(cmd);
-      cp.exec(cmd, { cwd }, (err, out) => {
+      cp.exec(cmd, { cwd }, (err, stdout, stderr) => {
         if (err) {
           return reject(err);
         }
-        if (log) {
-          this.logger.info(out);
+        if (log && stdout) {
+          this.logger.info(stdout);
         }
-        return resolve(out);
+
+        if (stderr) {
+          this.logger.info(stderr);
+        }
+        return resolve(stdout);
       });
     });
   }
@@ -837,7 +847,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     log: boolean = true,
     cwd?: string
   ): Promise<T> {
-    const out = await this.exec(cmd, log);
+    const out = await this.exec(cmd, log, cwd);
     return JSON.parse(out.replaceAll(EOL, ""));
   }
 
