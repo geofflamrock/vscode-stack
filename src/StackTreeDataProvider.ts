@@ -750,11 +750,9 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   private async getBranchesByCommitterDate(cwd?: string): Promise<string[]> {
-    const branches = await this.exec(
-      `git branch --list --format=%(refname:short) --sort=-committerdate`,
-      false,
-      cwd
-    );
-    return branches.split("\n").filter((branch) => branch.length > 0);
+    const branches = await this.repository.getBranches({});
+    return branches
+      .filter((branch) => branch.name)
+      .map((branch) => branch.name!);
   }
 }
