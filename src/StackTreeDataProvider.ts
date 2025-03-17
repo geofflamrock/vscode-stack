@@ -17,6 +17,7 @@ import {
 } from "vscode";
 import { Stack, GitHubPullRequest, Branch } from "./types";
 import { canCompareBranchToParent } from "./types/Branch";
+import { Repository } from "./typings/git";
 
 export type StackTreeItem = {
   type: "stack";
@@ -55,24 +56,24 @@ const enum GlyphChars {
 
 export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   constructor(
-    private workspaceRoot: string | undefined,
+    private repository: Repository,
     private logger: LogOutputChannel
-  ) {}
+  ) {
+    this._workspaceRoot = this.repository.rootUri.fsPath;
+  }
 
   private _onDidChangeTreeData: EventEmitter<
     StackTreeData | undefined | null | void
   > = new EventEmitter<StackTreeData | undefined | null | void>();
   readonly onDidChangeTreeData: Event<StackTreeData | undefined | null | void> =
     this._onDidChangeTreeData.event;
+  private _workspaceRoot;
 
   refresh(): void {
     this._onDidChangeTreeData.fire();
   }
 
   async newStack(): Promise<void> {
-    if (!this.workspaceRoot) {
-      return;
-    }
     const stackName = await window.showInputBox({ prompt: "Enter stack name" });
 
     if (!stackName) {
@@ -80,7 +81,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     }
 
     const branchesOrderedByCommitterDate =
-      await this.getBranchesByCommitterDate(this.workspaceRoot);
+      await this.getBranchesByCommitterDate(this._workspaceRoot);
 
     const sourceBranch = await window.showQuickPick(
       branchesOrderedByCommitterDate,
@@ -149,7 +150,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          let cmd = `stack new --name "${stackName}" --source-branch "${sourceBranch}" --working-dir "${this.workspaceRoot}"`;
+          let cmd = `stack new --name "${stackName}" --source-branch "${sourceBranch}" --working-dir "${this._workspaceRoot}"`;
 
           if (branchName) {
             cmd += ` --branch ${branchName}`;
@@ -166,12 +167,8 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async newBranch(stack: StackTreeItem): Promise<void> {
-    if (!this.workspaceRoot) {
-      return;
-    }
-
     const branchesOrderedByCommitterDate =
-      await this.getBranchesByCommitterDate(this.workspaceRoot);
+      await this.getBranchesByCommitterDate(this.repository.rootUri.fsPath);
 
     const createNewBranchQuickPickItem: QuickPickItem = {
       label: "Create new branch",
@@ -221,7 +218,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
         },
         async () => {
           try {
-            let cmd = `stack branch new --stack "${stack.stack.name}" --name "${branchName}" --working-dir "${this.workspaceRoot}"`;
+            let cmd = `stack branch new --stack "${stack.stack.name}" --name "${branchName}" --working-dir "${this._workspaceRoot}"`;
             await this.exec(cmd);
           } catch (err) {
             window.showErrorMessage(`Error creating branch in stack: ${err}`);
@@ -240,7 +237,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
         },
         async () => {
           try {
-            let cmd = `stack branch add --stack "${stack.stack.name}" --name "${branchName}" --working-dir "${this.workspaceRoot}"`;
+            let cmd = `stack branch add --stack "${stack.stack.name}" --name "${branchName}" --working-dir "${this._workspaceRoot}"`;
             await this.exec(cmd);
           } catch (err) {
             window.showErrorMessage(`Error adding branch to stack: ${err}`);
@@ -254,10 +251,6 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async sync(stack: StackTreeItem): Promise<void> {
-    if (!this.workspaceRoot) {
-      return;
-    }
-
     const syncStack: QuickPickItem = {
       label: "Sync Stack",
       detail:
@@ -291,7 +284,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       async () => {
         try {
           await this.exec(
-            `stack sync --stack "${stack.stack.name}" --working-dir "${this.workspaceRoot}" --yes`
+            `stack sync --stack "${stack.stack.name}" --working-dir "${this._workspaceRoot}" --yes`
           );
 
           this.refresh();
@@ -303,10 +296,6 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async update(stack: StackTreeItem): Promise<void> {
-    if (!this.workspaceRoot) {
-      return;
-    }
-
     const syncStack: QuickPickItem = {
       label: "Update Stack",
       detail:
@@ -340,7 +329,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       async () => {
         try {
           await this.exec(
-            `stack update --stack "${stack.stack.name}" --working-dir "${this.workspaceRoot}"`
+            `stack update --stack "${stack.stack.name}" --working-dir "${this._workspaceRoot}"`
           );
         } catch (err) {
           window.showErrorMessage(`Error updating changes: ${err}`);
@@ -353,10 +342,6 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async pull(stack: StackTreeItem): Promise<void> {
-    if (!this.workspaceRoot) {
-      window.showInformationMessage("No stack in empty workspace");
-      return;
-    }
     await window.withProgress(
       {
         location: ProgressLocation.Notification,
@@ -366,7 +351,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       async () => {
         try {
           await this.exec(
-            `stack pull --stack "${stack.stack.name}" --working-dir "${this.workspaceRoot}"`
+            `stack pull --stack "${stack.stack.name}" --working-dir "${this._workspaceRoot}"`
           );
 
           this.refresh();
@@ -378,10 +363,6 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async push(stack: StackTreeItem, forceWithLease: boolean): Promise<void> {
-    if (!this.workspaceRoot) {
-      window.showInformationMessage("No stack in empty workspace");
-      return;
-    }
     await window.withProgress(
       {
         location: ProgressLocation.Notification,
@@ -392,7 +373,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
         try {
           await this.exec(
             `stack push --stack "${stack.stack.name}" --working-dir "${
-              this.workspaceRoot
+              this._workspaceRoot
             }" ${forceWithLease ? "--force-with-lease" : ""}`
           );
 
@@ -405,11 +386,6 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async delete(stack: StackTreeItem): Promise<void> {
-    if (!this.workspaceRoot) {
-      window.showInformationMessage("No stack in empty workspace");
-      return;
-    }
-
     const deleteStack: QuickPickItem = {
       label: "Delete Stack",
       detail:
@@ -446,7 +422,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       async () => {
         try {
           await this.exec(
-            `stack delete --stack "${stack.stack.name}" --working-dir "${this.workspaceRoot}" --yes`
+            `stack delete --stack "${stack.stack.name}" --working-dir "${this._workspaceRoot}" --yes`
           );
         } catch (err) {
           window.showErrorMessage(`Error deleting stack: ${err}`);
@@ -459,10 +435,6 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async cleanup(stack: StackTreeItem): Promise<void> {
-    if (!this.workspaceRoot) {
-      return;
-    }
-
     const cleanupStack: QuickPickItem = {
       label: "Cleanup Stack",
       detail: "Will delete any branches which are no longer on the remote",
@@ -498,7 +470,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       async () => {
         try {
           await this.exec(
-            `stack cleanup --stack "${stack.stack.name}" --working-dir "${this.workspaceRoot}" --yes`
+            `stack cleanup --stack "${stack.stack.name}" --working-dir "${this._workspaceRoot}" --yes`
           );
         } catch (err) {
           window.showErrorMessage(`Error cleaning up stack: ${err}`);
@@ -511,11 +483,6 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async switchTo(branch: string): Promise<void> {
-    if (!this.workspaceRoot) {
-      window.showInformationMessage("No stack in empty workspace");
-      return;
-    }
-
     await window.withProgress(
       {
         location: ProgressLocation.Notification,
@@ -525,7 +492,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       async () => {
         try {
           await this.exec(
-            `stack switch --branch "${branch}" --working-dir "${this.workspaceRoot}"`
+            `stack switch --branch "${branch}" --working-dir "${this._workspaceRoot}"`
           );
         } catch (err) {
           window.showErrorMessage(`Error switching to branch: ${err}`);
@@ -535,10 +502,6 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async removeBranchFromStack(branch: BranchTreeItem): Promise<void> {
-    if (!this.workspaceRoot) {
-      return;
-    }
-
     const removeBranchFromStack: QuickPickItem = {
       label: "Remove Branch",
       detail: "The branch will not be deleted, only removed from the stack.",
@@ -574,7 +537,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       async () => {
         try {
           await this.exec(
-            `stack branch remove --stack "${branch.stack.name}" --name "${branch.branch.name}" --working-dir "${this.workspaceRoot}" --yes`
+            `stack branch remove --stack "${branch.stack.name}" --name "${branch.branch.name}" --working-dir "${this._workspaceRoot}" --yes`
           );
         } catch (err) {
           window.showErrorMessage(`Error switching to branch: ${err}`);
@@ -667,13 +630,9 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async getChildren(element?: StackTreeData): Promise<StackTreeData[]> {
-    if (!this.workspaceRoot) {
-      return [];
-    }
-
     if (!element) {
       const stacks = await this.execJson<Stack[]>(
-        `stack status --all --json --working-dir "${this.workspaceRoot}"`,
+        `stack status --all --json --working-dir "${this._workspaceRoot}"`,
         false
       );
 

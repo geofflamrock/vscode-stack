@@ -6,6 +6,7 @@ import {
   window,
   Disposable,
   commands,
+  extensions,
 } from "vscode";
 import {
   BranchTreeItem,
@@ -13,6 +14,7 @@ import {
   StackTreeDataProvider,
   StackTreeItem,
 } from "./StackTreeDataProvider";
+import { API, GitExtension } from "./typings/git";
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
@@ -22,15 +24,65 @@ export function activate(context: ExtensionContext) {
   const logger = window.createOutputChannel("Stack", { log: true });
   disposables.push(logger);
 
-  const rootPath =
-    workspace.workspaceFolders && workspace.workspaceFolders.length > 0
-      ? workspace.workspaceFolders[0].uri.fsPath
-      : undefined;
+  let gitExtension = extensions.getExtension<GitExtension>("vscode.git");
 
-  const stackDataProvider = new StackTreeDataProvider(rootPath, logger);
+  const initialize = () => {
+    gitExtension!.activate().then((extension) => {
+      const onDidChangeGitExtensionEnablement = (enabled: boolean) => {
+        if (enabled) {
+          const gitAPI = extension.getAPI(1);
+          if (!gitAPI.repositories.length) {
+            logger.warn("No git repositories found in the workspace.");
+            return;
+          }
 
-  disposables.push(window.registerTreeDataProvider("stack", stackDataProvider));
+          const stackDataProvider = new StackTreeDataProvider(
+            gitAPI.repositories[0],
+            logger
+          );
 
+          disposables.push(
+            window.registerTreeDataProvider("stack", stackDataProvider)
+          );
+
+          registerCommands(stackDataProvider);
+        } else {
+          Disposable.from(...disposables).dispose();
+        }
+      };
+
+      disposables.push(
+        extension.onDidChangeEnablement(onDidChangeGitExtensionEnablement)
+      );
+      onDidChangeGitExtensionEnablement(extension.enabled);
+    });
+  };
+
+  if (gitExtension) {
+    initialize();
+  } else {
+    const listener = extensions.onDidChange(() => {
+      if (
+        !gitExtension &&
+        extensions.getExtension<GitExtension>("vscode.git")
+      ) {
+        gitExtension = extensions.getExtension<GitExtension>("vscode.git");
+        initialize();
+        listener.dispose();
+      }
+    });
+    disposables.push(listener);
+  }
+
+  context.subscriptions.push(
+    new Disposable(() => Disposable.from(...disposables).dispose())
+  );
+}
+
+// This method is called when your extension is deactivated
+export function deactivate() {}
+
+function registerCommands(stackDataProvider: StackTreeDataProvider) {
   commands.registerCommand("stack.refresh", () => stackDataProvider.refresh());
   commands.registerCommand("stack.sync", async (stack?: StackTreeItem) => {
     if (stack) {
@@ -109,11 +161,4 @@ export function activate(context: ExtensionContext) {
       }
     }
   );
-
-  context.subscriptions.push(
-    new Disposable(() => Disposable.from(...disposables).dispose())
-  );
 }
-
-// This method is called when your extension is deactivated
-export function deactivate() {}
