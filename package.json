@@ -157,12 +157,12 @@
         },
         {
           "command": "stack.switch",
-          "when": "viewItem == branch",
+          "when": "viewItem == branch.exists",
           "group": "inline"
         },
         {
           "command": "stack.branch.remove",
-          "when": "viewItem == branch"
+          "when": "viewItem == branch.exists"
         },
         {
           "command": "stack.pr.open",

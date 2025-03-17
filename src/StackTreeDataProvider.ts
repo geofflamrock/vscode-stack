@@ -16,6 +16,7 @@ import {
   window,
 } from "vscode";
 import { Stack, GitHubPullRequest, Branch } from "./types";
+import { canCompareBranchToParent } from "./types/Branch";
 
 export type StackTreeItem = {
   type: "stack";
@@ -618,22 +619,30 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     } else if (element.type === "branch") {
       const branchTreeItem = new TreeItem(
         element.branch.name,
-        TreeItemCollapsibleState.Collapsed
+        canCompareBranchToParent(element.branch)
+          ? TreeItemCollapsibleState.Collapsed
+          : TreeItemCollapsibleState.None
       );
       branchTreeItem.iconPath = new ThemeIcon("git-branch");
-      branchTreeItem.contextValue = "branch";
+      branchTreeItem.contextValue = `branch.${
+        element.branch.exists ? "exists" : "deleted"
+      }`;
       if (!element.branch.exists) {
         branchTreeItem.description = "(deleted)";
       } else if (element.branch.remoteTrackingBranch) {
         let description = "";
-        if (
-          element.branch.remoteTrackingBranch.ahead > 0 ||
-          element.branch.remoteTrackingBranch.behind > 0
-        ) {
-          description += `${element.branch.remoteTrackingBranch.behind}${GlyphChars.ArrowDown} ${element.branch.remoteTrackingBranch.ahead}${GlyphChars.ArrowUp} `;
+        if (element.branch.remoteTrackingBranch.exists) {
+          if (
+            element.branch.remoteTrackingBranch.ahead > 0 ||
+            element.branch.remoteTrackingBranch.behind > 0
+          ) {
+            description += `${element.branch.remoteTrackingBranch.behind}${GlyphChars.ArrowDown} ${element.branch.remoteTrackingBranch.ahead}${GlyphChars.ArrowUp} `;
+          }
         }
 
-        description += ` ${GlyphChars.ArrowLeftRight}  ${element.branch.remoteTrackingBranch.name}`;
+        description += ` ${GlyphChars.ArrowLeftRight}  ${
+          element.branch.remoteTrackingBranch.name
+        }${element.branch.remoteTrackingBranch.exists ? "" : " (deleted)"}`;
         branchTreeItem.description = description;
       }
       return branchTreeItem;
@@ -708,37 +717,41 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
 
         return branches;
       } else if (element.type === "branch") {
-        // Get the previous branch in the stack
-        const branches = element.stack.branches;
-        const branchIndex = branches.indexOf(element.branch);
-        const parentBranch =
-          branchIndex > 0
-            ? branches[branchIndex - 1]
-            : element.stack.sourceBranch;
+        if (canCompareBranchToParent(element.branch)) {
+          // Get the previous branch in the stack
+          const branches = element.stack.branches;
+          const branchIndex = branches.indexOf(element.branch);
+          const parentBranch =
+            branchIndex > 0
+              ? branches[branchIndex - 1]
+              : element.stack.sourceBranch;
 
-        const aheadOfParent = element.branch.parent?.ahead ?? 0;
-        const behindParent =
-          (element.branch.parent?.behind ?? 0) +
-          (parentBranch.remoteTrackingBranch?.behind ?? 0);
+          const aheadOfParent = element.branch.parent?.ahead ?? 0;
+          const behindParent =
+            (element.branch.parent?.behind ?? 0) +
+            (parentBranch.remoteTrackingBranch?.behind ?? 0);
 
-        const branchParentStatusTreeItem: ParentStatusTreeItem = {
-          type: "branchParentStatus",
-          parentBranchName:
-            parentBranch.remoteTrackingBranch?.name ?? parentBranch.name,
-          aheadOfParent: aheadOfParent,
-          behindParent: behindParent,
-        };
+          const branchParentStatusTreeItem: ParentStatusTreeItem = {
+            type: "branchParentStatus",
+            parentBranchName:
+              parentBranch.remoteTrackingBranch?.name ?? parentBranch.name,
+            aheadOfParent: aheadOfParent,
+            behindParent: behindParent,
+          };
 
-        const treeItems: StackTreeData[] = [branchParentStatusTreeItem];
+          const treeItems: StackTreeData[] = [branchParentStatusTreeItem];
 
-        if (element.branch.pullRequest) {
-          treeItems.push({
-            type: "pullRequest",
-            pullRequest: element.branch.pullRequest,
-          });
+          if (element.branch.pullRequest) {
+            treeItems.push({
+              type: "pullRequest",
+              pullRequest: element.branch.pullRequest,
+            });
+          }
+
+          return treeItems;
         }
 
-        return treeItems;
+        return [];
       }
     }
 
