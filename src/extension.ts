@@ -82,7 +82,10 @@ export function activate(context: ExtensionContext) {
           await stackDataProvider.switchTo(
             branchOrStack.stack.sourceBranch.name
           );
-        } else if (branchOrStack.type === "branch") {
+        } else if (
+          branchOrStack.type === "branch" &&
+          branchOrStack.branch.exists
+        ) {
           await stackDataProvider.switchTo(branchOrStack.branch.name);
         }
       }
