@@ -15,93 +15,17 @@ import {
   TreeItemCollapsibleState,
   window,
 } from "vscode";
-
-type Stack2 = {
-  name: string;
-  sourceBranch: SourceBranch;
-  branches: StackBranch[];
-};
-
-type SourceBranch = {
-  name: string;
-  exists: boolean;
-  tip?: Commit;
-  remoteTrackingBranch?: RemoteTrackingBranchStatus;
-};
-
-type RemoteTrackingBranchStatus = {
-  name: string;
-  exists: boolean;
-  ahead: number;
-  behind: number;
-};
-
-type StackBranch = {
-  name: string;
-  exists: boolean;
-  tip?: Commit;
-  remoteTrackingBranch?: RemoteTrackingBranchStatus;
-  pullRequest?: GitHubPullRequest;
-  parent?: ParentBranchStatus;
-};
-
-type ParentBranchStatus = {
-  ahead: number;
-  behind: number;
-};
-
-type Stack = {
-  name: string;
-  sourceBranch: string;
-  branches: string[];
-  status: StackStatus;
-};
-
-type StackStatus = {
-  branches: StackBranchStatus;
-};
-
-type GitHubPullRequest = {
-  number: number;
-  title: string;
-  url: string;
-  isDraft: boolean;
-};
-
-type StackBranchStatus = {
-  [name: string]: BranchDetail;
-};
-
-type BranchDetail = {
-  status: BranchStatus;
-  pullRequest?: GitHubPullRequest;
-};
-
-type BranchStatus = {
-  existsLocally: boolean;
-  hasRemoteTrackingBranch: boolean;
-  existsInRemote: boolean;
-  aheadOfParent: number;
-  behindParent: number;
-  aheadOfRemote: number;
-  behindRemote: number;
-  tip: Commit;
-};
-
-type Commit = {
-  sha: string;
-  message: string;
-};
+import { Stack, GitHubPullRequest, Branch } from "./types";
 
 export type StackTreeItem = {
   type: "stack";
-  stack: Stack2;
+  stack: Stack;
 };
 
 export type BranchTreeItem = {
   type: "branch";
-  stack: Stack2;
-  branch: StackBranch;
+  stack: Stack;
+  branch: Branch;
 };
 
 export type ParentStatusTreeItem = {
@@ -739,7 +663,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     }
 
     if (!element) {
-      const stacks = await this.execJson<Stack2[]>(
+      const stacks = await this.execJson<Stack[]>(
         `stack status --all --json --working-dir "${this.workspaceRoot}"`,
         false
       );
