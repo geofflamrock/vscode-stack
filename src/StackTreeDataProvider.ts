@@ -15,9 +15,14 @@ import {
   TreeItemCollapsibleState,
   window,
 } from "vscode";
-import { Stack, GitHubPullRequest, Branch } from "./types";
-import { canCompareBranchToParent } from "./types/Branch";
+import {
+  Stack,
+  GitHubPullRequest,
+  StackBranch,
+  canCompareBranchToParent,
+} from "./types";
 import { Repository } from "./typings/git";
+import { IStackApi, StackApi } from "./stack";
 
 export type StackTreeItem = {
   type: "stack";
@@ -27,7 +32,7 @@ export type StackTreeItem = {
 export type BranchTreeItem = {
   type: "branch";
   stack: Stack;
-  branch: Branch;
+  branch: StackBranch;
 };
 
 export type ParentStatusTreeItem = {
@@ -55,19 +60,13 @@ const enum GlyphChars {
 }
 
 export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
-  constructor(
-    private repository: Repository,
-    private logger: LogOutputChannel
-  ) {
-    this._workspaceRoot = this.repository.rootUri.fsPath;
-  }
+  constructor(private api: IStackApi) {}
 
   private _onDidChangeTreeData: EventEmitter<
     StackTreeData | undefined | null | void
   > = new EventEmitter<StackTreeData | undefined | null | void>();
   readonly onDidChangeTreeData: Event<StackTreeData | undefined | null | void> =
     this._onDidChangeTreeData.event;
-  private _workspaceRoot;
 
   refresh(): void {
     this._onDidChangeTreeData.fire();
@@ -81,7 +80,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     }
 
     const branchesOrderedByCommitterDate =
-      await this.getBranchesByCommitterDate(this._workspaceRoot);
+      await this.api.getBranchesByCommitterDate();
 
     const sourceBranch = await window.showQuickPick(
       branchesOrderedByCommitterDate,
@@ -150,12 +149,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          let cmd = `stack new --name "${stackName}" --source-branch "${sourceBranch}" --working-dir "${this._workspaceRoot}"`;
-
-          if (branchName) {
-            cmd += ` --branch ${branchName}`;
-          }
-          await this.exec(cmd);
+          await this.api.newStack(stackName, sourceBranch, branchName);
         } catch (err) {
           window.showErrorMessage(`Error creating stack: ${err}`);
           throw err;
@@ -168,7 +162,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
 
   async newBranch(stack: StackTreeItem): Promise<void> {
     const branchesOrderedByCommitterDate =
-      await this.getBranchesByCommitterDate(this.repository.rootUri.fsPath);
+      await this.api.getBranchesByCommitterDate();
 
     const createNewBranchQuickPickItem: QuickPickItem = {
       label: "Create new branch",
@@ -218,8 +212,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
         },
         async () => {
           try {
-            let cmd = `stack branch new --stack "${stack.stack.name}" --name "${branchName}" --working-dir "${this._workspaceRoot}"`;
-            await this.exec(cmd);
+            await this.api.newBranch(stack.stack.name, branchName!);
           } catch (err) {
             window.showErrorMessage(`Error creating branch in stack: ${err}`);
             throw err;
@@ -237,8 +230,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
         },
         async () => {
           try {
-            let cmd = `stack branch add --stack "${stack.stack.name}" --name "${branchName}" --working-dir "${this._workspaceRoot}"`;
-            await this.exec(cmd);
+            await this.api.addBranch(stack.stack.name, branchName!);
           } catch (err) {
             window.showErrorMessage(`Error adding branch to stack: ${err}`);
             throw err;
@@ -283,10 +275,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.exec(
-            `stack sync --stack "${stack.stack.name}" --working-dir "${this._workspaceRoot}" --yes`
-          );
-
+          await this.api.sync(stack.stack.name);
           this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error syncing changes: ${err}`);
@@ -328,17 +317,14 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.exec(
-            `stack update --stack "${stack.stack.name}" --working-dir "${this._workspaceRoot}"`
-          );
+          await this.api.update(stack.stack.name);
+          this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error updating changes: ${err}`);
           throw err;
         }
       }
     );
-
-    this.refresh();
   }
 
   async pull(stack: StackTreeItem): Promise<void> {
@@ -350,10 +336,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.exec(
-            `stack pull --stack "${stack.stack.name}" --working-dir "${this._workspaceRoot}"`
-          );
-
+          await this.api.pull(stack.stack.name);
           this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error pulling changes: ${err}`);
@@ -371,12 +354,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.exec(
-            `stack push --stack "${stack.stack.name}" --working-dir "${
-              this._workspaceRoot
-            }" ${forceWithLease ? "--force-with-lease" : ""}`
-          );
-
+          await this.api.push(stack.stack.name, forceWithLease);
           this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error pushing changes: ${err}`);
@@ -421,17 +399,14 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.exec(
-            `stack delete --stack "${stack.stack.name}" --working-dir "${this._workspaceRoot}" --yes`
-          );
+          await this.api.delete(stack.stack.name);
+          this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error deleting stack: ${err}`);
           throw err;
         }
       }
     );
-
-    this.refresh();
   }
 
   async cleanup(stack: StackTreeItem): Promise<void> {
@@ -469,17 +444,14 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.exec(
-            `stack cleanup --stack "${stack.stack.name}" --working-dir "${this._workspaceRoot}" --yes`
-          );
+          await this.api.cleanup(stack.stack.name);
+          this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error cleaning up stack: ${err}`);
           throw err;
         }
       }
     );
-
-    this.refresh();
   }
 
   async switchTo(branch: string): Promise<void> {
@@ -491,9 +463,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.exec(
-            `stack switch --branch "${branch}" --working-dir "${this._workspaceRoot}"`
-          );
+          await this.api.switchToBranch(branch);
         } catch (err) {
           window.showErrorMessage(`Error switching to branch: ${err}`);
         }
@@ -536,16 +506,13 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.exec(
-            `stack branch remove --stack "${branch.stack.name}" --name "${branch.branch.name}" --working-dir "${this._workspaceRoot}" --yes`
-          );
+          await this.api.removeBranch(branch.stack.name, branch.branch.name);
+          this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error switching to branch: ${err}`);
         }
       }
     );
-
-    this.refresh();
   }
 
   openPullRequest(pullRequest: PullRequestTreeItem): void {
@@ -631,10 +598,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
 
   async getChildren(element?: StackTreeData): Promise<StackTreeData[]> {
     if (!element) {
-      const stacks = await this.execJson<Stack[]>(
-        `stack status --all --json --working-dir "${this._workspaceRoot}"`,
-        false
-      );
+      const stacks = await this.api.getStacks();
 
       return stacks.map((stack) => {
         return {
@@ -677,23 +641,16 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
         return branches;
       } else if (element.type === "branch") {
         if (canCompareBranchToParent(element.branch)) {
-          // Get the previous branch in the stack
-          const branches = element.stack.branches;
-          const branchIndex = branches.indexOf(element.branch);
-          const parentBranch =
-            branchIndex > 0
-              ? branches[branchIndex - 1]
-              : element.stack.sourceBranch;
-
           const aheadOfParent = element.branch.parent?.ahead ?? 0;
           const behindParent =
-            (element.branch.parent?.behind ?? 0) +
-            (parentBranch.remoteTrackingBranch?.behind ?? 0);
+            (element.branch.parent.behind ?? 0) +
+            (element.branch.parent.branch.remoteTrackingBranch?.behind ?? 0);
 
           const branchParentStatusTreeItem: ParentStatusTreeItem = {
             type: "branchParentStatus",
             parentBranchName:
-              parentBranch.remoteTrackingBranch?.name ?? parentBranch.name,
+              element.branch.parent.branch.remoteTrackingBranch?.name ??
+              element.branch.parent.branch.name,
             aheadOfParent: aheadOfParent,
             behindParent: behindParent,
           };
@@ -715,44 +672,5 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     }
 
     return [];
-  }
-
-  private exec(
-    cmd: string,
-    log: boolean = true,
-    cwd?: string
-  ): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
-      this.logger.info(cmd);
-      cp.exec(cmd, { cwd }, (err, stdout, stderr) => {
-        if (err) {
-          return reject(err);
-        }
-        if (log && stdout) {
-          this.logger.info(stdout);
-        }
-
-        if (stderr) {
-          this.logger.info(stderr);
-        }
-        return resolve(stdout);
-      });
-    });
-  }
-
-  private async execJson<T>(
-    cmd: string,
-    log: boolean = true,
-    cwd?: string
-  ): Promise<T> {
-    const out = await this.exec(cmd, log, cwd);
-    return JSON.parse(out.replaceAll(EOL, ""));
-  }
-
-  private async getBranchesByCommitterDate(cwd?: string): Promise<string[]> {
-    const branches = await this.repository.getBranches({});
-    return branches
-      .filter((branch) => branch.name)
-      .map((branch) => branch.name!);
   }
 }

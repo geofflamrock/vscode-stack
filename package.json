@@ -100,7 +100,7 @@
           "id": "stack",
           "name": "Stacks",
           "icon": "$(layers)",
-          "when": "workspaceFolderCount > 0 && git.state == initialized"
+          "when": "git.state == initialized"
         }
       ]
     },
