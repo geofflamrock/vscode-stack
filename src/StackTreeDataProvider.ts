@@ -1,11 +1,8 @@
-import * as cp from "child_process";
-import { EOL } from "os";
 import pluralize from "pluralize";
 import {
   commands,
   Event,
   EventEmitter,
-  LogOutputChannel,
   ProgressLocation,
   QuickPickItem,
   QuickPickItemKind,
@@ -21,8 +18,8 @@ import {
   StackBranch,
   canCompareBranchToParent,
 } from "./types";
-import { Repository } from "./typings/git";
-import { IStackApi, StackApi } from "./stack";
+import { IStackApi } from "./stack";
+import { StackCache } from "./stack/stackCache";
 
 export type StackTreeItem = {
   type: "stack";
@@ -60,7 +57,11 @@ const enum GlyphChars {
 }
 
 export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
-  constructor(private api: IStackApi) {}
+  private stackCache: StackCache;
+
+  constructor(private api: IStackApi) {
+    this.stackCache = new StackCache(api);
+  }
 
   private _onDidChangeTreeData: EventEmitter<
     StackTreeData | undefined | null | void
@@ -69,6 +70,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     this._onDidChangeTreeData.event;
 
   refresh(): void {
+    this.stackCache.clearCache();
     this._onDidChangeTreeData.fire();
   }
 
@@ -598,7 +600,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
 
   async getChildren(element?: StackTreeData): Promise<StackTreeData[]> {
     if (!element) {
-      const stacks = await this.api.getStacks();
+      const stacks = await this.stackCache.getStacks();
 
       return stacks.map((stack) => {
         return {
@@ -609,24 +611,6 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     } else {
       if (element.type === "stack") {
         const stackDetails = element.stack;
-
-        // try {
-        //   const stackStatus = await this.execJson<Stack2[]>(
-        //     `stack status --stack "${element.stack.name}" --json --full --working-dir "${this.workspaceRoot}"`,
-        //     false
-        //   );
-
-        //   if (stackStatus.length !== 1) {
-        //     return [];
-        //   }
-
-        //   stackDetails = stackStatus[0];
-        // } catch (err) {
-        //   this.logger.warn(
-        //     "An error has occurred getting full status for stack"
-        //   );
-        //   stackDetails = element.stack;
-        // }
 
         const branches: BranchTreeItem[] = stackDetails.branches.map(
           (branch) => {
