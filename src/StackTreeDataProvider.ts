@@ -6,10 +6,12 @@ import {
   ProgressLocation,
   QuickPickItem,
   QuickPickItemKind,
+  ThemeColor,
   ThemeIcon,
   TreeDataProvider,
   TreeItem,
   TreeItemCollapsibleState,
+  Uri,
   window,
 } from "vscode";
 import {
@@ -555,12 +557,23 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
           ? TreeItemCollapsibleState.Collapsed
           : TreeItemCollapsibleState.None
       );
-      branchTreeItem.iconPath = new ThemeIcon("git-branch");
+      branchTreeItem.iconPath = new ThemeIcon(
+        "git-branch",
+        element.branch.exists
+          ? undefined
+          : new ThemeColor("descriptionForeground")
+      );
       branchTreeItem.contextValue = `branch.${
         element.branch.exists ? "exists" : "deleted"
       }`;
+
+      // Set the resource URI to apply decorations
+      branchTreeItem.resourceUri = Uri.parse(
+        `stack:${element.branch.name}${element.branch.exists ? "" : ".deleted"}`
+      );
+
       if (!element.branch.exists) {
-        branchTreeItem.description = "(deleted)";
+        branchTreeItem.tooltip = "This branch has been deleted";
       } else if (element.branch.remoteTrackingBranch) {
         let description = "";
         if (element.branch.remoteTrackingBranch.exists) {

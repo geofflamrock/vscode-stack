@@ -14,8 +14,22 @@ import {
   StackTreeDataProvider,
   StackTreeItem,
 } from "./StackTreeDataProvider";
-import { API, GitExtension } from "./typings/git";
+import { GitExtension } from "./typings/git";
 import { StackApi } from "./stack";
+import * as vscode from "vscode";
+
+class BranchFileDecorationProvider implements vscode.FileDecorationProvider {
+  onDidChangeFileDecorations?: vscode.Event<vscode.Uri | vscode.Uri[]>;
+
+  provideFileDecoration(uri: vscode.Uri): vscode.FileDecoration | undefined {
+    if (uri.path.endsWith(".deleted")) {
+      return {
+        color: new vscode.ThemeColor("descriptionForeground"),
+      };
+    }
+    return undefined;
+  }
+}
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
@@ -73,6 +87,11 @@ export function activate(context: ExtensionContext) {
     });
     disposables.push(listener);
   }
+
+  const provider = new BranchFileDecorationProvider();
+  context.subscriptions.push(
+    vscode.window.registerFileDecorationProvider(provider)
+  );
 
   context.subscriptions.push(
     new Disposable(() => Disposable.from(...disposables).dispose())
