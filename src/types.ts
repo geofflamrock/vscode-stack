@@ -13,6 +13,7 @@ export type Commit = {
 export type StackBranch = Branch & {
   pullRequest: GitHubPullRequest | null;
   parent: ParentBranchStatus;
+  children: StackBranch[];
 };
 
 export type GitHubPullRequest = {
@@ -23,7 +24,7 @@ export type GitHubPullRequest = {
 };
 
 export type ParentBranchStatus = {
-  branch: Branch;
+  name: string;
   ahead: number;
   behind: number;
 };

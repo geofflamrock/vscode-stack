@@ -34,6 +34,12 @@ export type BranchTreeItem = {
   branch: StackBranch;
 };
 
+export type ChildBranchesTreeItem = {
+  type: "childBranches";
+  stack: Stack;
+  children: StackBranch[];
+};
+
 export type ParentStatusTreeItem = {
   type: "branchParentStatus";
   parentBranchName: string;
@@ -49,6 +55,7 @@ export type PullRequestTreeItem = {
 export type StackTreeData =
   | StackTreeItem
   | BranchTreeItem
+  | ChildBranchesTreeItem
   | ParentStatusTreeItem
   | PullRequestTreeItem;
 
@@ -553,7 +560,8 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     } else if (element.type === "branch") {
       const branchTreeItem = new TreeItem(
         element.branch.name,
-        canCompareBranchToParent(element.branch)
+        canCompareBranchToParent(element.branch) ||
+        element.branch.children.length
           ? TreeItemCollapsibleState.Collapsed
           : TreeItemCollapsibleState.None
       );
@@ -591,6 +599,24 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
         branchTreeItem.description = description;
       }
       return branchTreeItem;
+    } else if (element.type === "childBranches") {
+      const childBranchesTreeItem = new TreeItem(
+        `${element.children.length} ${pluralize(
+          "branch",
+          element.children.length
+        )}`,
+        TreeItemCollapsibleState.Collapsed
+      );
+      childBranchesTreeItem.iconPath = new ThemeIcon("list-tree");
+      childBranchesTreeItem.contextValue = "childBranches";
+      const activeChildBranchCount = element.children.filter(
+        (branch) => branch.exists && branch.remoteTrackingBranch?.exists
+      ).length;
+
+      if (activeChildBranchCount < element.children.length) {
+        childBranchesTreeItem.description = `${activeChildBranchCount} active`;
+      }
+      return childBranchesTreeItem;
     } else if (element.type === "branchParentStatus") {
       const branchParentStatusTreeItem = new TreeItem(
         `${element.aheadOfParent} ahead, ${element.behindParent} behind ${element.parentBranchName}`,
@@ -637,22 +663,20 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
 
         return branches;
       } else if (element.type === "branch") {
+        const treeItems: StackTreeData[] = [];
+
         if (canCompareBranchToParent(element.branch)) {
           const aheadOfParent = element.branch.parent?.ahead ?? 0;
-          const behindParent =
-            (element.branch.parent.behind ?? 0) +
-            (element.branch.parent.branch.remoteTrackingBranch?.behind ?? 0);
+          const behindParent = element.branch.parent.behind ?? 0;
 
           const branchParentStatusTreeItem: ParentStatusTreeItem = {
             type: "branchParentStatus",
-            parentBranchName:
-              element.branch.parent.branch.remoteTrackingBranch?.name ??
-              element.branch.parent.branch.name,
+            parentBranchName: element.branch.parent.name,
             aheadOfParent: aheadOfParent,
             behindParent: behindParent,
           };
 
-          const treeItems: StackTreeData[] = [branchParentStatusTreeItem];
+          treeItems.push(branchParentStatusTreeItem);
 
           if (element.branch.pullRequest) {
             treeItems.push({
@@ -660,11 +684,35 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
               pullRequest: element.branch.pullRequest,
             });
           }
-
-          return treeItems;
         }
 
-        return [];
+        if (element.branch.children.length > 0) {
+          // treeItems.push({
+          //   type: "childBranches",
+          //   stack: element.stack,
+          //   children: element.branch.children,
+          // });
+          const childBranches: BranchTreeItem[] = element.branch.children.map(
+            (childBranch) => {
+              return {
+                type: "branch",
+                stack: element.stack,
+                branch: childBranch,
+              };
+            }
+          );
+          treeItems.push(...childBranches);
+        }
+
+        return treeItems;
+      } else if (element.type === "childBranches") {
+        return element.children.map((childBranch) => {
+          return {
+            type: "branch",
+            stack: element.stack,
+            branch: childBranch,
+          };
+        });
       }
     }
 
