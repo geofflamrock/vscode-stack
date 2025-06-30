@@ -171,7 +171,9 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     this.refresh();
   }
 
-  async newBranch(stack: StackTreeItem): Promise<void> {
+  async newBranch(
+    stackOrBranch: StackTreeItem | BranchTreeItem
+  ): Promise<void> {
     const branchesOrderedByCommitterDate =
       await this.api.getBranchesByCommitterDate();
 
@@ -218,12 +220,18 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       await window.withProgress(
         {
           location: ProgressLocation.Notification,
-          title: `Creating new branch '${branchName}' in stack '${stack.stack.name}'`,
+          title: `Creating new branch '${branchName}' in stack '${stackOrBranch.stack.name}'`,
           cancellable: false,
         },
         async () => {
           try {
-            await this.api.newBranch(stack.stack.name, branchName!);
+            await this.api.newBranch(
+              stackOrBranch.stack.name,
+              branchName!,
+              stackOrBranch.type === "stack"
+                ? stackOrBranch.stack.sourceBranch.name
+                : stackOrBranch.branch.name
+            );
           } catch (err) {
             window.showErrorMessage(`Error creating branch in stack: ${err}`);
             throw err;
@@ -236,12 +244,18 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       await window.withProgress(
         {
           location: ProgressLocation.Notification,
-          title: `Adding branch '${branchName}' to stack '${stack.stack.name}'`,
+          title: `Adding branch '${branchName}' to stack '${stackOrBranch.stack.name}'`,
           cancellable: false,
         },
         async () => {
           try {
-            await this.api.addBranch(stack.stack.name, branchName!);
+            await this.api.addBranch(
+              stackOrBranch.stack.name,
+              branchName!,
+              stackOrBranch.type === "stack"
+                ? stackOrBranch.stack.sourceBranch.name
+                : stackOrBranch.branch.name
+            );
           } catch (err) {
             window.showErrorMessage(`Error adding branch to stack: ${err}`);
             throw err;

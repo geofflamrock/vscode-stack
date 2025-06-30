@@ -126,7 +126,7 @@ function registerCommands(stackDataProvider: StackTreeDataProvider) {
   });
   commands.registerCommand(
     "stack.branch.new",
-    async (stack?: StackTreeItem) => {
+    async (stack?: StackTreeItem | BranchTreeItem) => {
       if (stack) {
         await stackDataProvider.newBranch(stack);
       }

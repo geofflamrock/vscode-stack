@@ -17,8 +17,8 @@ export interface IStackApi {
     branchName?: string
   ): Promise<void>;
 
-  newBranch(stack: string, name: string): Promise<void>;
-  addBranch(stack: string, name: string): Promise<void>;
+  newBranch(stack: string, name: string, parent: string): Promise<void>;
+  addBranch(stack: string, name: string, parent: string): Promise<void>;
   removeBranch(stack: string, name: string): Promise<void>;
 
   sync(stack: string, updateStrategy?: UpdateStrategy): Promise<void>;
@@ -98,18 +98,18 @@ export class StackApi implements IStackApi {
     this.exec(cmd);
   }
 
-  async newBranch(stack: string, name: string): Promise<void> {
-    let cmd = `stack branch new --stack "${stack}" --name "${name}" --working-dir "${this.workingDirectory()}"`;
+  async newBranch(stack: string, name: string, parent: string): Promise<void> {
+    let cmd = `stack branch new --stack "${stack}" --branch "${name}" --parent "${parent}" --working-dir "${this.workingDirectory()}"`;
     await this.exec(cmd);
   }
 
-  async addBranch(stack: string, name: string): Promise<void> {
-    let cmd = `stack branch add --stack "${stack}" --name "${name}" --working-dir "${this.workingDirectory()}"`;
+  async addBranch(stack: string, name: string, parent: string): Promise<void> {
+    let cmd = `stack branch add --stack "${stack}" --branch "${name}" --parent "${parent}" --working-dir "${this.workingDirectory()}"`;
     await this.exec(cmd);
   }
 
   async removeBranch(stack: string, name: string): Promise<void> {
-    let cmd = `stack branch remove --stack "${stack}" --name "${name}" --working-dir "${this.workingDirectory()}" --yes`;
+    let cmd = `stack branch remove --stack "${stack}" --branch "${name}" --working-dir "${this.workingDirectory()}" --yes`;
     await this.exec(cmd);
   }
 
