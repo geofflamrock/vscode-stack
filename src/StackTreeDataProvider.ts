@@ -1,22 +1,27 @@
-import * as cp from "child_process";
-import { EOL } from "os";
 import pluralize from "pluralize";
 import {
   commands,
   Event,
   EventEmitter,
-  LogOutputChannel,
   ProgressLocation,
   QuickPickItem,
   QuickPickItemKind,
+  ThemeColor,
   ThemeIcon,
   TreeDataProvider,
   TreeItem,
   TreeItemCollapsibleState,
+  Uri,
   window,
 } from "vscode";
-import { Stack, GitHubPullRequest, Branch } from "./types";
-import { canCompareBranchToParent } from "./types/Branch";
+import {
+  Stack,
+  GitHubPullRequest,
+  StackBranch,
+  canCompareBranchToParent,
+} from "./types";
+import { IStackApi } from "./stack";
+import { StackCache } from "./stack/stackCache";
 
 export type StackTreeItem = {
   type: "stack";
@@ -26,7 +31,13 @@ export type StackTreeItem = {
 export type BranchTreeItem = {
   type: "branch";
   stack: Stack;
-  branch: Branch;
+  branch: StackBranch;
+};
+
+export type ChildBranchesTreeItem = {
+  type: "childBranches";
+  stack: Stack;
+  children: StackBranch[];
 };
 
 export type ParentStatusTreeItem = {
@@ -44,6 +55,7 @@ export type PullRequestTreeItem = {
 export type StackTreeData =
   | StackTreeItem
   | BranchTreeItem
+  | ChildBranchesTreeItem
   | ParentStatusTreeItem
   | PullRequestTreeItem;
 
@@ -54,10 +66,11 @@ const enum GlyphChars {
 }
 
 export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
-  constructor(
-    private workspaceRoot: string | undefined,
-    private logger: LogOutputChannel
-  ) {}
+  private stackCache: StackCache;
+
+  constructor(private api: IStackApi) {
+    this.stackCache = new StackCache(api);
+  }
 
   private _onDidChangeTreeData: EventEmitter<
     StackTreeData | undefined | null | void
@@ -66,13 +79,11 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     this._onDidChangeTreeData.event;
 
   refresh(): void {
+    this.stackCache.clearCache();
     this._onDidChangeTreeData.fire();
   }
 
   async newStack(): Promise<void> {
-    if (!this.workspaceRoot) {
-      return;
-    }
     const stackName = await window.showInputBox({ prompt: "Enter stack name" });
 
     if (!stackName) {
@@ -80,7 +91,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     }
 
     const branchesOrderedByCommitterDate =
-      await this.getBranchesByCommitterDate(this.workspaceRoot);
+      await this.api.getBranchesByCommitterDate();
 
     const sourceBranch = await window.showQuickPick(
       branchesOrderedByCommitterDate,
@@ -149,12 +160,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          let cmd = `stack new --name "${stackName}" --source-branch "${sourceBranch}" --working-dir "${this.workspaceRoot}"`;
-
-          if (branchName) {
-            cmd += ` --branch ${branchName}`;
-          }
-          await this.exec(cmd);
+          await this.api.newStack(stackName, sourceBranch, branchName);
         } catch (err) {
           window.showErrorMessage(`Error creating stack: ${err}`);
           throw err;
@@ -165,13 +171,11 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     this.refresh();
   }
 
-  async newBranch(stack: StackTreeItem): Promise<void> {
-    if (!this.workspaceRoot) {
-      return;
-    }
-
+  async newBranch(
+    stackOrBranch: StackTreeItem | BranchTreeItem
+  ): Promise<void> {
     const branchesOrderedByCommitterDate =
-      await this.getBranchesByCommitterDate(this.workspaceRoot);
+      await this.api.getBranchesByCommitterDate();
 
     const createNewBranchQuickPickItem: QuickPickItem = {
       label: "Create new branch",
@@ -216,13 +220,18 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       await window.withProgress(
         {
           location: ProgressLocation.Notification,
-          title: `Creating new branch '${branchName}' in stack '${stack.stack.name}'`,
+          title: `Creating new branch '${branchName}' in stack '${stackOrBranch.stack.name}'`,
           cancellable: false,
         },
         async () => {
           try {
-            let cmd = `stack branch new --stack "${stack.stack.name}" --name "${branchName}" --working-dir "${this.workspaceRoot}"`;
-            await this.exec(cmd);
+            await this.api.newBranch(
+              stackOrBranch.stack.name,
+              branchName!,
+              stackOrBranch.type === "stack"
+                ? stackOrBranch.stack.sourceBranch.name
+                : stackOrBranch.branch.name
+            );
           } catch (err) {
             window.showErrorMessage(`Error creating branch in stack: ${err}`);
             throw err;
@@ -235,13 +244,18 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       await window.withProgress(
         {
           location: ProgressLocation.Notification,
-          title: `Adding branch '${branchName}' to stack '${stack.stack.name}'`,
+          title: `Adding branch '${branchName}' to stack '${stackOrBranch.stack.name}'`,
           cancellable: false,
         },
         async () => {
           try {
-            let cmd = `stack branch add --stack "${stack.stack.name}" --name "${branchName}" --working-dir "${this.workspaceRoot}"`;
-            await this.exec(cmd);
+            await this.api.addBranch(
+              stackOrBranch.stack.name,
+              branchName!,
+              stackOrBranch.type === "stack"
+                ? stackOrBranch.stack.sourceBranch.name
+                : stackOrBranch.branch.name
+            );
           } catch (err) {
             window.showErrorMessage(`Error adding branch to stack: ${err}`);
             throw err;
@@ -254,31 +268,51 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async sync(stack: StackTreeItem): Promise<void> {
-    if (!this.workspaceRoot) {
-      return;
-    }
-
-    const syncStack: QuickPickItem = {
-      label: "Sync Stack",
-      detail:
-        "Will fetch the latest changes from the remote, update the stack and push commits back to the remote",
-    };
+    const updateStrategy = await this.api.getUpdateStrategyFromConfig();
 
     const separator: QuickPickItem = {
       label: "",
       kind: QuickPickItemKind.Separator,
     };
 
+    const confirmQuickPickItems: QuickPickItem[] = [];
+    const syncStackWithMerge: QuickPickItem = {
+      label: "Sync Stack (Merge)",
+      detail:
+        "Will fetch the latest changes from the remote, update the stack by merging branches and push commits back to the remote",
+    };
+    const syncStackWithRebase: QuickPickItem = {
+      label: "Sync Stack (Rebase)",
+      detail:
+        "Will fetch the latest changes from the remote, update the stack by rebasing branches and push commits back to the remote",
+    };
+
+    if (updateStrategy === undefined) {
+      confirmQuickPickItems.push(syncStackWithMerge, syncStackWithRebase);
+    } else {
+      confirmQuickPickItems.push(
+        ...(updateStrategy === "merge"
+          ? [syncStackWithMerge, syncStackWithRebase]
+          : [syncStackWithRebase, syncStackWithMerge])
+      );
+    }
+
     const cancel: QuickPickItem = {
       label: "Cancel",
     };
 
-    const confirm = await window.showQuickPick([syncStack, separator, cancel], {
-      placeHolder: `Are you sure you want to sync stack '${stack.stack.name}'?`,
-      title: "Confirm Sync Stack",
-    });
+    const confirm = await window.showQuickPick(
+      [...confirmQuickPickItems, separator, cancel],
+      {
+        placeHolder: `Are you sure you want to sync stack '${stack.stack.name}'?`,
+        title: "Confirm Sync Stack",
+      }
+    );
 
-    if (confirm !== syncStack) {
+    if (
+      confirm === undefined ||
+      confirmQuickPickItems.indexOf(confirm) === -1
+    ) {
       return;
     }
 
@@ -290,9 +324,11 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.exec(
-            `stack sync --stack "${stack.stack.name}" --working-dir "${this.workspaceRoot}" --yes`
-          );
+          if (confirm === syncStackWithMerge) {
+            await this.api.sync(stack.stack.name, "merge");
+          } else if (confirm === syncStackWithRebase) {
+            await this.api.sync(stack.stack.name, "rebase");
+          }
 
           this.refresh();
         } catch (err) {
@@ -303,15 +339,29 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async update(stack: StackTreeItem): Promise<void> {
-    if (!this.workspaceRoot) {
-      return;
-    }
+    const updateStrategy = await this.api.getUpdateStrategyFromConfig();
 
-    const syncStack: QuickPickItem = {
-      label: "Update Stack",
+    const confirmQuickPickItems: QuickPickItem[] = [];
+    const updateStackWithMerge: QuickPickItem = {
+      label: "Update Stack (Merge)",
       detail:
-        "Will update branches in the stack locally, does not pull changes from or push changes to the remote",
+        "Will update branches in the stack locally by merging branches, does not pull changes from or push changes to the remote",
     };
+    const updateStackWithRebase: QuickPickItem = {
+      label: "Update Stack (Rebase)",
+      detail:
+        "Will update branches in the stack locally by rebasing branches, does not pull changes from or push changes to the remote",
+    };
+
+    if (updateStrategy === undefined) {
+      confirmQuickPickItems.push(updateStackWithMerge, updateStackWithRebase);
+    } else {
+      confirmQuickPickItems.push(
+        ...(updateStrategy === "merge"
+          ? [updateStackWithMerge, updateStackWithRebase]
+          : [updateStackWithRebase, updateStackWithMerge])
+      );
+    }
 
     const separator: QuickPickItem = {
       label: "",
@@ -322,12 +372,18 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       label: "Cancel",
     };
 
-    const confirm = await window.showQuickPick([syncStack, separator, cancel], {
-      placeHolder: `Are you sure you want to update stack '${stack.stack.name}'?`,
-      title: "Confirm Update Stack",
-    });
+    const confirm = await window.showQuickPick(
+      [...confirmQuickPickItems, separator, cancel],
+      {
+        placeHolder: `Are you sure you want to update stack '${stack.stack.name}'?`,
+        title: "Confirm Update Stack",
+      }
+    );
 
-    if (confirm !== syncStack) {
+    if (
+      confirm === undefined ||
+      confirmQuickPickItems.indexOf(confirm) === -1
+    ) {
       return;
     }
 
@@ -339,24 +395,22 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.exec(
-            `stack update --stack "${stack.stack.name}" --working-dir "${this.workspaceRoot}"`
-          );
+          if (confirm === updateStackWithMerge) {
+            await this.api.update(stack.stack.name, "merge");
+          } else if (confirm === updateStackWithRebase) {
+            await this.api.update(stack.stack.name, "rebase");
+          }
+
+          this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error updating changes: ${err}`);
           throw err;
         }
       }
     );
-
-    this.refresh();
   }
 
   async pull(stack: StackTreeItem): Promise<void> {
-    if (!this.workspaceRoot) {
-      window.showInformationMessage("No stack in empty workspace");
-      return;
-    }
     await window.withProgress(
       {
         location: ProgressLocation.Notification,
@@ -365,10 +419,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.exec(
-            `stack pull --stack "${stack.stack.name}" --working-dir "${this.workspaceRoot}"`
-          );
-
+          await this.api.pull(stack.stack.name);
           this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error pulling changes: ${err}`);
@@ -378,10 +429,6 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async push(stack: StackTreeItem, forceWithLease: boolean): Promise<void> {
-    if (!this.workspaceRoot) {
-      window.showInformationMessage("No stack in empty workspace");
-      return;
-    }
     await window.withProgress(
       {
         location: ProgressLocation.Notification,
@@ -390,12 +437,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.exec(
-            `stack push --stack "${stack.stack.name}" --working-dir "${
-              this.workspaceRoot
-            }" ${forceWithLease ? "--force-with-lease" : ""}`
-          );
-
+          await this.api.push(stack.stack.name, forceWithLease);
           this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error pushing changes: ${err}`);
@@ -405,11 +447,6 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async delete(stack: StackTreeItem): Promise<void> {
-    if (!this.workspaceRoot) {
-      window.showInformationMessage("No stack in empty workspace");
-      return;
-    }
-
     const deleteStack: QuickPickItem = {
       label: "Delete Stack",
       detail:
@@ -445,24 +482,17 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.exec(
-            `stack delete --stack "${stack.stack.name}" --working-dir "${this.workspaceRoot}" --yes`
-          );
+          await this.api.delete(stack.stack.name);
+          this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error deleting stack: ${err}`);
           throw err;
         }
       }
     );
-
-    this.refresh();
   }
 
   async cleanup(stack: StackTreeItem): Promise<void> {
-    if (!this.workspaceRoot) {
-      return;
-    }
-
     const cleanupStack: QuickPickItem = {
       label: "Cleanup Stack",
       detail: "Will delete any branches which are no longer on the remote",
@@ -497,25 +527,17 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.exec(
-            `stack cleanup --stack "${stack.stack.name}" --working-dir "${this.workspaceRoot}" --yes`
-          );
+          await this.api.cleanup(stack.stack.name);
+          this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error cleaning up stack: ${err}`);
           throw err;
         }
       }
     );
-
-    this.refresh();
   }
 
   async switchTo(branch: string): Promise<void> {
-    if (!this.workspaceRoot) {
-      window.showInformationMessage("No stack in empty workspace");
-      return;
-    }
-
     await window.withProgress(
       {
         location: ProgressLocation.Notification,
@@ -524,9 +546,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.exec(
-            `stack switch --branch "${branch}" --working-dir "${this.workspaceRoot}"`
-          );
+          await this.api.switchToBranch(branch);
         } catch (err) {
           window.showErrorMessage(`Error switching to branch: ${err}`);
         }
@@ -535,10 +555,6 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async removeBranchFromStack(branch: BranchTreeItem): Promise<void> {
-    if (!this.workspaceRoot) {
-      return;
-    }
-
     const removeBranchFromStack: QuickPickItem = {
       label: "Remove Branch",
       detail: "The branch will not be deleted, only removed from the stack.",
@@ -573,16 +589,13 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.exec(
-            `stack branch remove --stack "${branch.stack.name}" --name "${branch.branch.name}" --working-dir "${this.workspaceRoot}" --yes`
-          );
+          await this.api.removeBranch(branch.stack.name, branch.branch.name);
+          this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error switching to branch: ${err}`);
         }
       }
     );
-
-    this.refresh();
   }
 
   openPullRequest(pullRequest: PullRequestTreeItem): void {
@@ -619,16 +632,28 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     } else if (element.type === "branch") {
       const branchTreeItem = new TreeItem(
         element.branch.name,
-        canCompareBranchToParent(element.branch)
+        canCompareBranchToParent(element.branch) ||
+        element.branch.children.length
           ? TreeItemCollapsibleState.Collapsed
           : TreeItemCollapsibleState.None
       );
-      branchTreeItem.iconPath = new ThemeIcon("git-branch");
+      branchTreeItem.iconPath = new ThemeIcon(
+        "git-branch",
+        element.branch.exists
+          ? undefined
+          : new ThemeColor("descriptionForeground")
+      );
       branchTreeItem.contextValue = `branch.${
         element.branch.exists ? "exists" : "deleted"
       }`;
+
+      // Set the resource URI to apply decorations
+      branchTreeItem.resourceUri = Uri.parse(
+        `stack:${element.branch.name}${element.branch.exists ? "" : ".deleted"}`
+      );
+
       if (!element.branch.exists) {
-        branchTreeItem.description = "(deleted)";
+        branchTreeItem.tooltip = "This branch has been deleted";
       } else if (element.branch.remoteTrackingBranch) {
         let description = "";
         if (element.branch.remoteTrackingBranch.exists) {
@@ -646,6 +671,24 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
         branchTreeItem.description = description;
       }
       return branchTreeItem;
+    } else if (element.type === "childBranches") {
+      const childBranchesTreeItem = new TreeItem(
+        `${element.children.length} ${pluralize(
+          "branch",
+          element.children.length
+        )}`,
+        TreeItemCollapsibleState.Collapsed
+      );
+      childBranchesTreeItem.iconPath = new ThemeIcon("list-tree");
+      childBranchesTreeItem.contextValue = "childBranches";
+      const activeChildBranchCount = element.children.filter(
+        (branch) => branch.exists && branch.remoteTrackingBranch?.exists
+      ).length;
+
+      if (activeChildBranchCount < element.children.length) {
+        childBranchesTreeItem.description = `${activeChildBranchCount} active`;
+      }
+      return childBranchesTreeItem;
     } else if (element.type === "branchParentStatus") {
       const branchParentStatusTreeItem = new TreeItem(
         `${element.aheadOfParent} ahead, ${element.behindParent} behind ${element.parentBranchName}`,
@@ -667,15 +710,8 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async getChildren(element?: StackTreeData): Promise<StackTreeData[]> {
-    if (!this.workspaceRoot) {
-      return [];
-    }
-
     if (!element) {
-      const stacks = await this.execJson<Stack[]>(
-        `stack status --all --json --working-dir "${this.workspaceRoot}"`,
-        false
-      );
+      const stacks = await this.stackCache.getStacks();
 
       return stacks.map((stack) => {
         return {
@@ -686,24 +722,6 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     } else {
       if (element.type === "stack") {
         const stackDetails = element.stack;
-
-        // try {
-        //   const stackStatus = await this.execJson<Stack2[]>(
-        //     `stack status --stack "${element.stack.name}" --json --full --working-dir "${this.workspaceRoot}"`,
-        //     false
-        //   );
-
-        //   if (stackStatus.length !== 1) {
-        //     return [];
-        //   }
-
-        //   stackDetails = stackStatus[0];
-        // } catch (err) {
-        //   this.logger.warn(
-        //     "An error has occurred getting full status for stack"
-        //   );
-        //   stackDetails = element.stack;
-        // }
 
         const branches: BranchTreeItem[] = stackDetails.branches.map(
           (branch) => {
@@ -717,29 +735,20 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
 
         return branches;
       } else if (element.type === "branch") {
-        if (canCompareBranchToParent(element.branch)) {
-          // Get the previous branch in the stack
-          const branches = element.stack.branches;
-          const branchIndex = branches.indexOf(element.branch);
-          const parentBranch =
-            branchIndex > 0
-              ? branches[branchIndex - 1]
-              : element.stack.sourceBranch;
+        const treeItems: StackTreeData[] = [];
 
+        if (canCompareBranchToParent(element.branch)) {
           const aheadOfParent = element.branch.parent?.ahead ?? 0;
-          const behindParent =
-            (element.branch.parent?.behind ?? 0) +
-            (parentBranch.remoteTrackingBranch?.behind ?? 0);
+          const behindParent = element.branch.parent.behind ?? 0;
 
           const branchParentStatusTreeItem: ParentStatusTreeItem = {
             type: "branchParentStatus",
-            parentBranchName:
-              parentBranch.remoteTrackingBranch?.name ?? parentBranch.name,
+            parentBranchName: element.branch.parent.name,
             aheadOfParent: aheadOfParent,
             behindParent: behindParent,
           };
 
-          const treeItems: StackTreeData[] = [branchParentStatusTreeItem];
+          treeItems.push(branchParentStatusTreeItem);
 
           if (element.branch.pullRequest) {
             treeItems.push({
@@ -747,55 +756,38 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
               pullRequest: element.branch.pullRequest,
             });
           }
-
-          return treeItems;
         }
 
-        return [];
+        if (element.branch.children.length > 0) {
+          // treeItems.push({
+          //   type: "childBranches",
+          //   stack: element.stack,
+          //   children: element.branch.children,
+          // });
+          const childBranches: BranchTreeItem[] = element.branch.children.map(
+            (childBranch) => {
+              return {
+                type: "branch",
+                stack: element.stack,
+                branch: childBranch,
+              };
+            }
+          );
+          treeItems.push(...childBranches);
+        }
+
+        return treeItems;
+      } else if (element.type === "childBranches") {
+        return element.children.map((childBranch) => {
+          return {
+            type: "branch",
+            stack: element.stack,
+            branch: childBranch,
+          };
+        });
       }
     }
 
     return [];
-  }
-
-  private exec(
-    cmd: string,
-    log: boolean = true,
-    cwd?: string
-  ): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
-      this.logger.info(cmd);
-      cp.exec(cmd, { cwd }, (err, stdout, stderr) => {
-        if (err) {
-          return reject(err);
-        }
-        if (log && stdout) {
-          this.logger.info(stdout);
-        }
-
-        if (stderr) {
-          this.logger.info(stderr);
-        }
-        return resolve(stdout);
-      });
-    });
-  }
-
-  private async execJson<T>(
-    cmd: string,
-    log: boolean = true,
-    cwd?: string
-  ): Promise<T> {
-    const out = await this.exec(cmd, log, cwd);
-    return JSON.parse(out.replaceAll(EOL, ""));
-  }
-
-  private async getBranchesByCommitterDate(cwd?: string): Promise<string[]> {
-    const branches = await this.exec(
-      `git branch --list --format=%(refname:short) --sort=-committerdate`,
-      false,
-      cwd
-    );
-    return branches.split("\n").filter((branch) => branch.length > 0);
   }
 }
