@@ -4,9 +4,12 @@ import { Repository } from "../typings/git";
 import * as cp from "child_process";
 import { EOL } from "os";
 
+type UpdateStrategy = "merge" | "rebase";
+
 export interface IStackApi {
   getStacks(): Promise<Stack[]>;
   getBranchesByCommitterDate(): Promise<string[]>;
+  getUpdateStrategyFromConfig(): Promise<UpdateStrategy | undefined>;
 
   newStack(
     name: string,
@@ -18,11 +21,11 @@ export interface IStackApi {
   addBranch(stack: string, name: string): Promise<void>;
   removeBranch(stack: string, name: string): Promise<void>;
 
-  sync(stack: string): Promise<void>;
+  sync(stack: string, updateStrategy?: UpdateStrategy): Promise<void>;
   pull(stack: string): Promise<void>;
   push(stack: string, forceWithLease: boolean): Promise<void>;
 
-  update(stack: string): Promise<void>;
+  update(stack: string, updateStrategy?: UpdateStrategy): Promise<void>;
   delete(stack: string): Promise<void>;
   cleanup(stack: string): Promise<void>;
 
@@ -55,6 +58,32 @@ export class StackApi implements IStackApi {
       .map((branch) => branch.name!);
   }
 
+  async getUpdateStrategyFromConfig(): Promise<UpdateStrategy | undefined> {
+    const localConfig = await this._repository.getConfig(
+      "stack.update.strategy"
+    );
+
+    if (localConfig === "merge") {
+      return "merge";
+    }
+    if (localConfig === "rebase") {
+      return "rebase";
+    }
+
+    const globalConfig = await this._repository.getGlobalConfig(
+      "stack.update.strategy"
+    );
+
+    if (globalConfig === "merge") {
+      return "merge";
+    }
+    if (globalConfig === "rebase") {
+      return "rebase";
+    }
+
+    return undefined;
+  }
+
   async newStack(
     name: string,
     sourceBranch: string,
@@ -84,9 +113,11 @@ export class StackApi implements IStackApi {
     await this.exec(cmd);
   }
 
-  async sync(stack: string): Promise<void> {
+  async sync(stack: string, updateStrategy?: UpdateStrategy): Promise<void> {
     await this.exec(
-      `stack sync --stack "${stack}" --working-dir "${this.workingDirectory()}" --yes --verbose`
+      `stack sync --stack "${stack}" --working-dir "${this.workingDirectory()}" --yes${
+        updateStrategy ? ` --${updateStrategy}` : ""
+      }`
     );
   }
 
@@ -104,9 +135,11 @@ export class StackApi implements IStackApi {
     );
   }
 
-  async update(stack: string): Promise<void> {
+  async update(stack: string, updateStrategy?: UpdateStrategy): Promise<void> {
     await this.exec(
-      `stack update --stack "${stack}" --working-dir "${this.workingDirectory()}"`
+      `stack update --stack "${stack}" --working-dir "${this.workingDirectory()}"${
+        updateStrategy ? ` --${updateStrategy}` : ""
+      }`
     );
   }
 

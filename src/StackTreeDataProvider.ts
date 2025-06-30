@@ -254,27 +254,51 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async sync(stack: StackTreeItem): Promise<void> {
-    const syncStack: QuickPickItem = {
-      label: "Sync Stack",
-      detail:
-        "Will fetch the latest changes from the remote, update the stack and push commits back to the remote",
-    };
+    const updateStrategy = await this.api.getUpdateStrategyFromConfig();
 
     const separator: QuickPickItem = {
       label: "",
       kind: QuickPickItemKind.Separator,
     };
 
+    const confirmQuickPickItems: QuickPickItem[] = [];
+    const syncStackWithMerge: QuickPickItem = {
+      label: "Sync Stack (Merge)",
+      detail:
+        "Will fetch the latest changes from the remote, update the stack by merging branches and push commits back to the remote",
+    };
+    const syncStackWithRebase: QuickPickItem = {
+      label: "Sync Stack (Rebase)",
+      detail:
+        "Will fetch the latest changes from the remote, update the stack by rebasing branches and push commits back to the remote",
+    };
+
+    if (updateStrategy === undefined) {
+      confirmQuickPickItems.push(syncStackWithMerge, syncStackWithRebase);
+    } else {
+      confirmQuickPickItems.push(
+        ...(updateStrategy === "merge"
+          ? [syncStackWithMerge, syncStackWithRebase]
+          : [syncStackWithRebase, syncStackWithMerge])
+      );
+    }
+
     const cancel: QuickPickItem = {
       label: "Cancel",
     };
 
-    const confirm = await window.showQuickPick([syncStack, separator, cancel], {
-      placeHolder: `Are you sure you want to sync stack '${stack.stack.name}'?`,
-      title: "Confirm Sync Stack",
-    });
+    const confirm = await window.showQuickPick(
+      [...confirmQuickPickItems, separator, cancel],
+      {
+        placeHolder: `Are you sure you want to sync stack '${stack.stack.name}'?`,
+        title: "Confirm Sync Stack",
+      }
+    );
 
-    if (confirm !== syncStack) {
+    if (
+      confirm === undefined ||
+      confirmQuickPickItems.indexOf(confirm) === -1
+    ) {
       return;
     }
 
@@ -286,7 +310,12 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.api.sync(stack.stack.name);
+          if (confirm === syncStackWithMerge) {
+            await this.api.sync(stack.stack.name, "merge");
+          } else if (confirm === syncStackWithRebase) {
+            await this.api.sync(stack.stack.name, "rebase");
+          }
+
           this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error syncing changes: ${err}`);
@@ -296,11 +325,29 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async update(stack: StackTreeItem): Promise<void> {
-    const syncStack: QuickPickItem = {
-      label: "Update Stack",
+    const updateStrategy = await this.api.getUpdateStrategyFromConfig();
+
+    const confirmQuickPickItems: QuickPickItem[] = [];
+    const updateStackWithMerge: QuickPickItem = {
+      label: "Update Stack (Merge)",
       detail:
-        "Will update branches in the stack locally, does not pull changes from or push changes to the remote",
+        "Will update branches in the stack locally by merging branches, does not pull changes from or push changes to the remote",
     };
+    const updateStackWithRebase: QuickPickItem = {
+      label: "Update Stack (Rebase)",
+      detail:
+        "Will update branches in the stack locally by rebasing branches, does not pull changes from or push changes to the remote",
+    };
+
+    if (updateStrategy === undefined) {
+      confirmQuickPickItems.push(updateStackWithMerge, updateStackWithRebase);
+    } else {
+      confirmQuickPickItems.push(
+        ...(updateStrategy === "merge"
+          ? [updateStackWithMerge, updateStackWithRebase]
+          : [updateStackWithRebase, updateStackWithMerge])
+      );
+    }
 
     const separator: QuickPickItem = {
       label: "",
@@ -311,12 +358,18 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       label: "Cancel",
     };
 
-    const confirm = await window.showQuickPick([syncStack, separator, cancel], {
-      placeHolder: `Are you sure you want to update stack '${stack.stack.name}'?`,
-      title: "Confirm Update Stack",
-    });
+    const confirm = await window.showQuickPick(
+      [...confirmQuickPickItems, separator, cancel],
+      {
+        placeHolder: `Are you sure you want to update stack '${stack.stack.name}'?`,
+        title: "Confirm Update Stack",
+      }
+    );
 
-    if (confirm !== syncStack) {
+    if (
+      confirm === undefined ||
+      confirmQuickPickItems.indexOf(confirm) === -1
+    ) {
       return;
     }
 
@@ -328,7 +381,12 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.api.update(stack.stack.name);
+          if (confirm === updateStackWithMerge) {
+            await this.api.update(stack.stack.name, "merge");
+          } else if (confirm === updateStackWithRebase) {
+            await this.api.update(stack.stack.name, "rebase");
+          }
+
           this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error updating changes: ${err}`);
