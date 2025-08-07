@@ -143,11 +143,47 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async newStack(api?: IStackApi): Promise<void> {
-    const stackApi = api || this.getDefaultApi();
+    let stackApi = api || this.getDefaultApi();
+    
+    if (!stackApi && this.repositories.length > 1) {
+      // Multiple repositories - let user select which one
+      const repoItems = this.repositories.map(repo => ({
+        label: this.getRepositoryName(repo),
+        detail: repo.rootUri.fsPath,
+        repoPath: repo.rootUri.fsPath
+      }));
+      
+      const selectedRepo = await window.showQuickPick(repoItems, {
+        placeHolder: 'Select repository for new stack'
+      });
+      
+      if (!selectedRepo) {
+        this.logger?.info('User cancelled repository selection');
+        return;
+      }
+      
+      this.logger?.info(`User selected repository: ${selectedRepo.repoPath}`);
+      this.logger?.info(`Available APIs: ${Array.from(this.apis.keys()).map(r => r.rootUri.fsPath).join(', ')}`);
+      
+      // Find the API by matching repository path
+      for (const [repo, api] of this.apis.entries()) {
+        if (repo.rootUri.fsPath === selectedRepo.repoPath) {
+          this.logger?.info(`Found API for selected repo: ${repo.rootUri.fsPath}`);
+          stackApi = api;
+          break;
+        }
+      }
+    }
+    
     if (!stackApi) {
+      this.logger?.error('No stackApi found after selection process');
+      this.logger?.error(`Repositories length: ${this.repositories.length}`);
+      this.logger?.error(`APIs size: ${this.apis.size}`);
       window.showErrorMessage('No repository selected');
       return;
     }
+    
+    this.logger?.info('Successfully found stackApi, proceeding with stack creation');
     
     const stackName = await window.showInputBox({ prompt: "Enter stack name" });
 

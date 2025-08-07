@@ -172,9 +172,14 @@ function registerCommands(stackDataProvider: StackTreeDataProvider) {
       await stackDataProvider.update(stack);
     }
   });
-  commands.registerCommand("stack.new", () => {
-    // For new stack command, use default behavior (will prompt if multiple repos)
-    stackDataProvider.newStack();
+  commands.registerCommand("stack.new", (contextItem?: any) => {
+    // If called from repository context menu, use that repository's API
+    if (contextItem && contextItem.type === "repository") {
+      stackDataProvider.newStack(contextItem.api);
+    } else {
+      // For new stack command from title bar, use default behavior (will prompt if multiple repos)
+      stackDataProvider.newStack();
+    }
   });
   commands.registerCommand("stack.pull", async (stack?: StackTreeItem) => {
     if (stack) {
