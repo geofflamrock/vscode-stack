@@ -28,6 +28,12 @@
         "category": "Stack"
       },
       {
+        "command": "stack.new.repository",
+        "title": "New Stack in Repository",
+        "icon": "$(add)",
+        "category": "Stack"
+      },
+      {
         "command": "stack.refresh",
         "title": "Refresh",
         "icon": "$(refresh)",
@@ -118,6 +124,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "stack.new.repository",
+          "when": "viewItem == repository",
+          "group": "inline@1"
+        },
         {
           "command": "stack.sync",
           "when": "viewItem == stack",

@@ -6,8 +6,20 @@ import { EOL } from "os";
 
 type UpdateStrategy = "merge" | "rebase";
 
+type StackListItem = {
+  name: string;
+  sourceBranch: string;
+  branchCount: number;
+};
+
+type StackListResponse = {
+  stacks: StackListItem[];
+};
+
 export interface IStackApi {
   getStacks(): Promise<Stack[]>;
+  getStackList(): Promise<string[]>; // Quick list of stack names
+  getStackListWithMetadata(): Promise<StackListItem[]>; // Stack names with metadata
   getBranchesByCommitterDate(): Promise<string[]>;
   getUpdateStrategyFromConfig(): Promise<UpdateStrategy | undefined>;
 
@@ -49,6 +61,24 @@ export class StackApi implements IStackApi {
     );
 
     return stacks;
+  }
+
+  async getStackList(): Promise<string[]> {
+    const result = await this.execJson<StackListResponse>(
+      `stack list --json --working-dir "${this.workingDirectory()}"`,
+      false
+    );
+
+    return result.stacks.map((stack) => stack.name);
+  }
+
+  async getStackListWithMetadata(): Promise<StackListItem[]> {
+    const result = await this.execJson<StackListResponse>(
+      `stack list --json --working-dir "${this.workingDirectory()}"`,
+      false
+    );
+
+    return result.stacks;
   }
 
   async getBranchesByCommitterDate(): Promise<string[]> {

@@ -11,6 +11,7 @@ import {
 import {
   BranchTreeItem,
   PullRequestTreeItem,
+  RepositoryTreeItem,
   StackTreeDataProvider,
   StackTreeItem,
 } from "./StackTreeDataProvider";
@@ -151,6 +152,14 @@ function registerCommands(stackDataProvider: StackTreeDataProvider) {
     }
   });
   commands.registerCommand("stack.new", () => stackDataProvider.newStack());
+  commands.registerCommand(
+    "stack.new.repository",
+    async (repository?: RepositoryTreeItem) => {
+      if (repository && repository.type === "repository") {
+        await stackDataProvider.newStackInRepository(repository.repositoryPath);
+      }
+    }
+  );
   commands.registerCommand("stack.pull", async (stack?: StackTreeItem) => {
     if (stack) {
       await stackDataProvider.pull(stack);

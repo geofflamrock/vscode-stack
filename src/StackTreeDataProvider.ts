@@ -32,7 +32,7 @@ export type RepositoryTreeItem = {
   type: "repository";
   repositoryName: string;
   repositoryPath: string;
-  stacks: Stack[];
+  stacks?: Stack[]; // Optional - only populated when loaded
 };
 
 export type BranchTreeItem = {
@@ -76,6 +76,8 @@ const enum GlyphChars {
 export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   private stackCaches: Map<string, StackCache> = new Map();
   private apis: Map<string, IStackApi> = new Map();
+  private repositoryStackCounts: Map<string, number> = new Map();
+  private loadingStackCounts: Set<string> = new Set(); // Track which repos are currently loading
 
   constructor() {}
 
@@ -86,11 +88,16 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   ): void {
     this.apis.set(repositoryPath, api);
     this.stackCaches.set(repositoryPath, new StackCache(api));
+
+    // Asynchronously load stack count for this repository
+    this.loadRepositoryStackCount(repositoryPath);
   }
 
   removeRepository(repositoryPath: string): void {
     this.apis.delete(repositoryPath);
     this.stackCaches.delete(repositoryPath);
+    this.repositoryStackCounts.delete(repositoryPath);
+    this.loadingStackCounts.delete(repositoryPath);
   }
 
   getApiForRepository(repositoryPath: string): IStackApi | undefined {
@@ -132,13 +139,177 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
 
   refresh(): void {
     this.stackCaches.forEach((cache) => cache.clearCache());
+    this.repositoryStackCounts.clear();
+    this.loadingStackCounts.clear(); // Clear loading flags
+    this._onDidChangeTreeData.fire();
+
+    // Note: Stack counts will be loaded on-demand by getChildren() when the tree is rendered
+  }
+
+  async refreshRepositoryStackCounts(): Promise<void> {
+    // This method can be called to update repository descriptions with stack counts
+    // after initial lazy loading
     this._onDidChangeTreeData.fire();
   }
 
+  private async loadRepositoryStackCount(
+    repositoryPath: string
+  ): Promise<void> {
+    // Prevent duplicate loading
+    if (this.loadingStackCounts.has(repositoryPath)) {
+      return;
+    }
+
+    try {
+      this.loadingStackCounts.add(repositoryPath);
+      const api = this.apis.get(repositoryPath);
+      if (api) {
+        // Use the faster stack list command to get just the count
+        const stackList = await api.getStackListWithMetadata();
+        this.repositoryStackCounts.set(repositoryPath, stackList.length);
+        // Fire event to update the tree item description
+        this._onDidChangeTreeData.fire();
+      }
+    } catch (error) {
+      // Silently handle errors - the count just won't be shown
+    } finally {
+      this.loadingStackCounts.delete(repositoryPath);
+    }
+  }
+
   async newStack(): Promise<void> {
-    const api = this.getDefaultApi();
-    if (!api) {
+    if (this.apis.size === 0) {
       window.showErrorMessage("No repository available for creating stacks");
+      return;
+    }
+
+    let selectedApi: IStackApi;
+    let selectedRepoPath: string;
+
+    // If multiple repositories, let user choose
+    if (this.apis.size > 1) {
+      const repositoryOptions = Array.from(this.apis.entries()).map(
+        ([path, api]) => {
+          const repoName =
+            path.split("\\").pop() || path.split("/").pop() || path;
+          return {
+            label: repoName,
+            description: path,
+            path: path,
+            api: api,
+          };
+        }
+      );
+
+      const selectedRepo = await window.showQuickPick(repositoryOptions, {
+        placeHolder: "Select repository for the new stack",
+        title: "Choose Repository",
+      });
+
+      if (!selectedRepo) {
+        return;
+      }
+
+      selectedApi = selectedRepo.api;
+      selectedRepoPath = selectedRepo.path;
+    } else {
+      // Single repository
+      const entry = Array.from(this.apis.entries())[0];
+      selectedApi = entry[1];
+      selectedRepoPath = entry[0];
+    }
+
+    const stackName = await window.showInputBox({ prompt: "Enter stack name" });
+
+    if (!stackName) {
+      return;
+    }
+
+    const branchesOrderedByCommitterDate =
+      await selectedApi.getBranchesByCommitterDate();
+
+    const sourceBranch = await window.showQuickPick(
+      branchesOrderedByCommitterDate,
+      {
+        placeHolder: "Select source branch",
+      }
+    );
+
+    if (!sourceBranch) {
+      return;
+    }
+
+    const createNewBranchQuickPickItem: QuickPickItem = {
+      label: "Create new branch",
+      iconPath: new ThemeIcon("plus"),
+    };
+    const noNewBranchQuickPickItem: QuickPickItem = {
+      label: "Do not create or add a branch",
+      iconPath: new ThemeIcon("circle-slash"),
+    };
+    const separatorQuickPickItem: QuickPickItem = {
+      label: "",
+      kind: QuickPickItemKind.Separator,
+    };
+    const existingBranchesQuickPickItems: QuickPickItem[] =
+      branchesOrderedByCommitterDate.map((branch) => ({
+        label: branch,
+        iconPath: new ThemeIcon("git-branch"),
+      }));
+
+    const branchNameSelection = await window.showQuickPick(
+      [
+        createNewBranchQuickPickItem,
+        noNewBranchQuickPickItem,
+        separatorQuickPickItem,
+        ...existingBranchesQuickPickItems,
+      ],
+      {
+        placeHolder: "Create or select a branch to add to the stack",
+      }
+    );
+
+    if (branchNameSelection === undefined) {
+      return;
+    }
+
+    let branchName: string | undefined = undefined;
+
+    if (branchNameSelection === createNewBranchQuickPickItem) {
+      branchName = await window.showInputBox({
+        prompt: "Enter new branch name",
+      });
+
+      if (!branchName) {
+        return;
+      }
+    } else if (branchNameSelection !== noNewBranchQuickPickItem) {
+      branchName = branchNameSelection.label;
+    }
+
+    await window.withProgress(
+      {
+        location: ProgressLocation.Notification,
+        title: `Creating stack '${stackName}'`,
+        cancellable: false,
+      },
+      async () => {
+        try {
+          await selectedApi.newStack(stackName, sourceBranch, branchName);
+        } catch (err) {
+          window.showErrorMessage(`Error creating stack: ${err}`);
+          throw err;
+        }
+      }
+    );
+
+    this.refresh();
+  }
+
+  async newStackInRepository(repositoryPath: string): Promise<void> {
+    const api = this.apis.get(repositoryPath);
+    if (!api) {
+      window.showErrorMessage("Repository not found or not available");
       return;
     }
 
@@ -175,7 +346,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       kind: QuickPickItemKind.Separator,
     };
     const existingBranchesQuickPickItems: QuickPickItem[] =
-      branchesOrderedByCommitterDate.map((branch) => ({
+      branchesOrderedByCommitterDate.map((branch: string) => ({
         label: branch,
         iconPath: new ThemeIcon("git-branch"),
       }));
@@ -722,10 +893,18 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       );
       repositoryTreeItem.id = `repo-${element.repositoryPath}`;
       repositoryTreeItem.iconPath = new ThemeIcon("repo");
-      repositoryTreeItem.description = `${element.stacks.length} ${pluralize(
-        "stack",
-        element.stacks.length
-      )}`;
+
+      // Show stack count if available, otherwise show loading or nothing
+      const stackCount = this.repositoryStackCounts.get(element.repositoryPath);
+      if (stackCount !== undefined) {
+        repositoryTreeItem.description = `${stackCount} ${pluralize(
+          "stack",
+          stackCount
+        )}`;
+      } else {
+        repositoryTreeItem.description = "Loading...";
+      }
+
       repositoryTreeItem.contextValue = "repository";
 
       return repositoryTreeItem;
@@ -853,12 +1032,10 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
           stack,
         }));
       } else {
-        // Multiple repositories - show repository sections
+        // Multiple repositories - show repository sections without loading stacks
         const repositories: RepositoryTreeItem[] = [];
 
         for (const repositoryPath of repositoryPaths) {
-          const cache = this.stackCaches.get(repositoryPath)!;
-          const stacks = await cache.getStacks();
           const repositoryName =
             repositoryPath.split("\\").pop() ||
             repositoryPath.split("/").pop() ||
@@ -868,16 +1045,27 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
             type: "repository",
             repositoryName,
             repositoryPath,
-            stacks,
+            // Don't load stacks here - they'll be loaded when the repository is expanded
           });
+
+          // Trigger async loading of stack count if not already loaded or loading
+          if (
+            !this.repositoryStackCounts.has(repositoryPath) &&
+            !this.loadingStackCounts.has(repositoryPath)
+          ) {
+            this.loadRepositoryStackCount(repositoryPath);
+          }
         }
 
         return repositories;
       }
     } else {
       if (element.type === "repository") {
-        // Show stacks for this repository
-        return element.stacks.map((stack) => ({
+        // Load stacks for this repository when it's expanded
+        const cache = this.stackCaches.get(element.repositoryPath)!;
+        const stacks = await cache.getStacks();
+
+        return stacks.map((stack) => ({
           type: "stack",
           stack: { ...stack, repositoryName: element.repositoryName },
         }));
