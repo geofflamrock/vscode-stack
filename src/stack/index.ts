@@ -39,16 +39,24 @@ export class StackApi implements IStackApi {
   ) {}
 
   private workingDirectory(): string {
-    return this._repository.rootUri.fsPath;
+    const path = this._repository.rootUri.fsPath;
+    this._logger.info(`Working directory path: ${path}`);
+    return path;
   }
 
   async getStacks(): Promise<Stack[]> {
-    const stacks = await this.execJson<Stack[]>(
-      `stack status --all --json --working-dir "${this.workingDirectory()}"`,
-      false
-    );
-
-    return stacks;
+    try {
+      this._logger.info(`Getting stacks for repository: ${this.workingDirectory()}`);
+      const stacks = await this.execJson<Stack[]>(
+        `stack status --all --json --working-dir "${this.workingDirectory()}"`,
+        false
+      );
+      this._logger.info(`Found ${stacks.length} stacks in ${this.workingDirectory()}`);
+      return stacks;
+    } catch (error) {
+      this._logger.error(`Error getting stacks for ${this.workingDirectory()}: ${error}`);
+      return [];
+    }
   }
 
   async getBranchesByCommitterDate(): Promise<string[]> {
@@ -170,14 +178,17 @@ export class StackApi implements IStackApi {
       this._logger.info(cmd);
       cp.exec(cmd, { cwd }, (err, stdout, stderr) => {
         if (err) {
+          this._logger.error(`Command failed: ${cmd}`);
+          this._logger.error(`Error: ${err.message}`);
+          this._logger.error(`Exit code: ${err.code}`);
           return reject(err);
         }
         if (log && stdout) {
-          this._logger.info(stdout);
+          this._logger.info(`Command output: ${stdout}`);
         }
 
         if (stderr) {
-          this._logger.info(stderr);
+          this._logger.warn(`Command stderr: ${stderr}`);
         }
         return resolve(stdout);
       });
@@ -189,7 +200,15 @@ export class StackApi implements IStackApi {
     log: boolean = true,
     cwd?: string
   ): Promise<T> {
+    this._logger.info(`execJson: Running command: ${cmd}`);
     const out = await this.exec(cmd, log, cwd);
-    return JSON.parse(out.replaceAll(EOL, ""));
+    const cleanedOut = out.replaceAll(EOL, "");
+    this._logger.info(`execJson: Raw output length: ${out.length}, cleaned length: ${cleanedOut.length}`);
+    if (cleanedOut.length < 1000) {
+      this._logger.info(`execJson: Output content: ${cleanedOut}`);
+    }
+    const result = JSON.parse(cleanedOut);
+    this._logger.info(`execJson: Parsed result type: ${typeof result}, array: ${Array.isArray(result)}`);
+    return result;
   }
 }

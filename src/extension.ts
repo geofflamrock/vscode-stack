@@ -14,7 +14,7 @@ import {
   StackTreeDataProvider,
   StackTreeItem,
 } from "./StackTreeDataProvider";
-import { GitExtension } from "./typings/git";
+import { GitExtension, Repository } from "./typings/git";
 import { StackApi } from "./stack";
 import * as vscode from "vscode";
 
@@ -42,17 +42,48 @@ export function activate(context: ExtensionContext) {
   let gitExtension = extensions.getExtension<GitExtension>("vscode.git");
 
   const initialize = () => {
+    logger.info("Initializing Stack extension...");
     gitExtension!.activate().then((extension) => {
-      const onDidChangeGitExtensionEnablement = (enabled: boolean) => {
-        if (enabled) {
-          const gitAPI = extension.getAPI(1);
-          if (!gitAPI.repositories.length) {
-            logger.warn("No git repositories found in the workspace.");
-            return;
-          }
+      logger.info("Git extension activated");
+      let stackDataProvider: StackTreeDataProvider | undefined;
 
-          const stackDataProvider = new StackTreeDataProvider(
-            new StackApi(gitAPI.repositories[0], logger)
+      const initializeStackProvider = () => {
+        const gitAPI = extension.getAPI(1);
+        if (!gitAPI.repositories.length) {
+          logger.info("Waiting for git repositories to be discovered...");
+          return;
+        }
+
+        logger.info(`Found ${gitAPI.repositories.length} git repositories`);
+
+        // Test stack command availability
+        const testRepo = gitAPI.repositories[0];
+        if (testRepo) {
+          logger.info(`Testing stack command in: ${testRepo.rootUri.fsPath}`);
+          const testApi = new StackApi(testRepo, logger);
+          testApi.getStacks().then(stacks => {
+            logger.info(`Test result: Found ${stacks.length} stacks in ${testRepo.rootUri.fsPath}`);
+          }).catch(error => {
+            logger.error(`Test failed: ${error}`);
+          });
+        }
+
+        // Create APIs for all repositories
+        const apis = new Map<Repository, StackApi>();
+        for (const repo of gitAPI.repositories) {
+          apis.set(repo, new StackApi(repo, logger));
+          logger.info(`Initialized stack API for repository: ${repo.rootUri.fsPath}`);
+        }
+
+        if (stackDataProvider) {
+          // Update existing provider with new repositories
+          stackDataProvider.updateRepositories(gitAPI.repositories, apis, logger);
+        } else {
+          // Create new provider
+          stackDataProvider = new StackTreeDataProvider(
+            gitAPI.repositories,
+            apis,
+            logger
           );
 
           disposables.push(
@@ -60,6 +91,30 @@ export function activate(context: ExtensionContext) {
           );
 
           registerCommands(stackDataProvider);
+        }
+      };
+
+      const onDidChangeGitExtensionEnablement = (enabled: boolean) => {
+        if (enabled) {
+          const gitAPI = extension.getAPI(1);
+          
+          // Try to initialize immediately
+          initializeStackProvider();
+          
+          // Listen for repository changes
+          disposables.push(
+            gitAPI.onDidOpenRepository(() => {
+              logger.info("Repository opened, reinitializing stack provider");
+              initializeStackProvider();
+            })
+          );
+          
+          disposables.push(
+            gitAPI.onDidCloseRepository(() => {
+              logger.info("Repository closed, reinitializing stack provider");
+              initializeStackProvider();
+            })
+          );
         } else {
           Disposable.from(...disposables).dispose();
         }
@@ -68,19 +123,23 @@ export function activate(context: ExtensionContext) {
       disposables.push(
         extension.onDidChangeEnablement(onDidChangeGitExtensionEnablement)
       );
+      logger.info(`Git extension enabled: ${extension.enabled}`);
       onDidChangeGitExtensionEnablement(extension.enabled);
     });
   };
 
   if (gitExtension) {
+    logger.info("Git extension found, initializing...");
     initialize();
   } else {
+    logger.warn("Git extension not found, waiting for it to load...");
     const listener = extensions.onDidChange(() => {
       if (
         !gitExtension &&
         extensions.getExtension<GitExtension>("vscode.git")
       ) {
         gitExtension = extensions.getExtension<GitExtension>("vscode.git");
+        logger.info("Git extension loaded, initializing...");
         initialize();
         listener.dispose();
       }
@@ -113,7 +172,10 @@ function registerCommands(stackDataProvider: StackTreeDataProvider) {
       await stackDataProvider.update(stack);
     }
   });
-  commands.registerCommand("stack.new", () => stackDataProvider.newStack());
+  commands.registerCommand("stack.new", () => {
+    // For new stack command, use default behavior (will prompt if multiple repos)
+    stackDataProvider.newStack();
+  });
   commands.registerCommand("stack.pull", async (stack?: StackTreeItem) => {
     if (stack) {
       await stackDataProvider.pull(stack);
@@ -151,13 +213,17 @@ function registerCommands(stackDataProvider: StackTreeDataProvider) {
       if (branchOrStack) {
         if (branchOrStack.type === "stack") {
           await stackDataProvider.switchTo(
-            branchOrStack.stack.sourceBranch.name
+            branchOrStack.stack.sourceBranch.name,
+            branchOrStack.api
           );
         } else if (
           branchOrStack.type === "branch" &&
           branchOrStack.branch.exists
         ) {
-          await stackDataProvider.switchTo(branchOrStack.branch.name);
+          await stackDataProvider.switchTo(
+            branchOrStack.branch.name,
+            branchOrStack.api
+          );
         }
       }
     }
