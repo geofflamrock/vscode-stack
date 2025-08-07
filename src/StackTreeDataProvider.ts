@@ -26,6 +26,7 @@ import { StackCache } from "./stack/stackCache";
 export type StackTreeItem = {
   type: "stack";
   stack: Stack;
+  repositoryPath: string;
 };
 
 export type RepositoryTreeItem = {
@@ -39,12 +40,14 @@ export type BranchTreeItem = {
   type: "branch";
   stack: Stack;
   branch: StackBranch;
+  repositoryPath: string;
 };
 
 export type ChildBranchesTreeItem = {
   type: "childBranches";
   stack: Stack;
   children: StackBranch[];
+  repositoryPath: string;
 };
 
 export type ParentStatusTreeItem = {
@@ -52,11 +55,13 @@ export type ParentStatusTreeItem = {
   parentBranchName: string;
   aheadOfParent: number;
   behindParent: number;
+  repositoryPath: string;
 };
 
 export type PullRequestTreeItem = {
   type: "pullRequest";
   pullRequest: GitHubPullRequest;
+  repositoryPath: string;
 };
 
 export type StackTreeData =
@@ -115,20 +120,10 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     return Array.from(this.apis.values())[0];
   }
 
-  private getApiForStack(stack: Stack): IStackApi | undefined {
-    // If stack has repository info, use that
-    if (stack.repositoryName) {
-      for (const [path, api] of this.apis.entries()) {
-        const repoName =
-          path.split("\\").pop() || path.split("/").pop() || path;
-        if (repoName === stack.repositoryName) {
-          return api;
-        }
-      }
-    }
-
-    // Fallback to default API
-    return this.getDefaultApi();
+  private getApiForStack(
+    element: StackTreeItem | BranchTreeItem | ChildBranchesTreeItem
+  ): IStackApi | undefined {
+    return this.apis.get(element.repositoryPath);
   }
 
   private _onDidChangeTreeData: EventEmitter<
@@ -403,7 +398,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   async newBranch(
     stackOrBranch: StackTreeItem | BranchTreeItem
   ): Promise<void> {
-    const api = this.getApiForStack(stackOrBranch.stack);
+    const api = this.getApiForStack(stackOrBranch);
     if (!api) {
       window.showErrorMessage("No API available for this stack's repository");
       return;
@@ -503,7 +498,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async sync(stack: StackTreeItem): Promise<void> {
-    const api = this.getApiForStack(stack.stack);
+    const api = this.getApiForStack(stack);
     if (!api) {
       window.showErrorMessage("No API available for this stack's repository");
       return;
@@ -580,7 +575,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async update(stack: StackTreeItem): Promise<void> {
-    const api = this.getApiForStack(stack.stack);
+    const api = this.getApiForStack(stack);
     if (!api) {
       window.showErrorMessage("No API available for this stack's repository");
       return;
@@ -658,7 +653,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async pull(stack: StackTreeItem): Promise<void> {
-    const api = this.getApiForStack(stack.stack);
+    const api = this.getApiForStack(stack);
     if (!api) {
       window.showErrorMessage("No API available for this stack's repository");
       return;
@@ -682,7 +677,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async push(stack: StackTreeItem, forceWithLease: boolean): Promise<void> {
-    const api = this.getApiForStack(stack.stack);
+    const api = this.getApiForStack(stack);
     if (!api) {
       window.showErrorMessage("No API available for this stack's repository");
       return;
@@ -706,7 +701,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async delete(stack: StackTreeItem): Promise<void> {
-    const api = this.getApiForStack(stack.stack);
+    const api = this.getApiForStack(stack);
     if (!api) {
       window.showErrorMessage("No API available for this stack's repository");
       return;
@@ -758,7 +753,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async cleanup(stack: StackTreeItem): Promise<void> {
-    const api = this.getApiForStack(stack.stack);
+    const api = this.getApiForStack(stack);
     if (!api) {
       window.showErrorMessage("No API available for this stack's repository");
       return;
@@ -832,7 +827,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async removeBranchFromStack(branch: BranchTreeItem): Promise<void> {
-    const api = this.getApiForStack(branch.stack);
+    const api = this.getApiForStack(branch);
     if (!api) {
       window.showErrorMessage("No API available for this stack's repository");
       return;
@@ -1025,11 +1020,13 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
 
       if (repositoryPaths.length === 1) {
         // Single repository - show stacks directly
-        const cache = this.stackCaches.get(repositoryPaths[0])!;
+        const repositoryPath = repositoryPaths[0];
+        const cache = this.stackCaches.get(repositoryPath)!;
         const stacks = await cache.getStacks();
         return stacks.map((stack) => ({
           type: "stack",
           stack,
+          repositoryPath,
         }));
       } else {
         // Multiple repositories - show repository sections without loading stacks
@@ -1068,6 +1065,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
         return stacks.map((stack) => ({
           type: "stack",
           stack: { ...stack, repositoryName: element.repositoryName },
+          repositoryPath: element.repositoryPath,
         }));
       } else if (element.type === "stack") {
         const stackDetails = element.stack;
@@ -1078,6 +1076,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
               type: "branch",
               stack: element.stack,
               branch,
+              repositoryPath: element.repositoryPath,
             };
           }
         );
@@ -1095,6 +1094,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
             parentBranchName: element.branch.parent.name,
             aheadOfParent: aheadOfParent,
             behindParent: behindParent,
+            repositoryPath: element.repositoryPath,
           };
 
           treeItems.push(branchParentStatusTreeItem);
@@ -1103,6 +1103,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
             treeItems.push({
               type: "pullRequest",
               pullRequest: element.branch.pullRequest,
+              repositoryPath: element.repositoryPath,
             });
           }
         }
@@ -1119,6 +1120,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
                 type: "branch",
                 stack: element.stack,
                 branch: childBranch,
+                repositoryPath: element.repositoryPath,
               };
             }
           );
@@ -1132,6 +1134,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
             type: "branch",
             stack: element.stack,
             branch: childBranch,
+            repositoryPath: element.repositoryPath,
           };
         });
       }
