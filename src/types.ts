@@ -40,6 +40,7 @@ export type Stack = {
   name: string;
   sourceBranch: Branch;
   branches: StackBranch[];
+  repositoryName?: string; // Added for multi-repo support
 };
 
 export function canCompareBranchToParent(branch: StackBranch): boolean {

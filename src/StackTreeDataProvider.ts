@@ -28,6 +28,13 @@ export type StackTreeItem = {
   stack: Stack;
 };
 
+export type RepositoryTreeItem = {
+  type: "repository";
+  repositoryName: string;
+  repositoryPath: string;
+  stacks: Stack[];
+};
+
 export type BranchTreeItem = {
   type: "branch";
   stack: Stack;
@@ -53,6 +60,7 @@ export type PullRequestTreeItem = {
 };
 
 export type StackTreeData =
+  | RepositoryTreeItem
   | StackTreeItem
   | BranchTreeItem
   | ChildBranchesTreeItem
@@ -66,10 +74,54 @@ const enum GlyphChars {
 }
 
 export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
-  private stackCache: StackCache;
+  private stackCaches: Map<string, StackCache> = new Map();
+  private apis: Map<string, IStackApi> = new Map();
 
-  constructor(private api: IStackApi) {
-    this.stackCache = new StackCache(api);
+  constructor() {}
+
+  addRepository(
+    repositoryPath: string,
+    repositoryName: string,
+    api: IStackApi
+  ): void {
+    this.apis.set(repositoryPath, api);
+    this.stackCaches.set(repositoryPath, new StackCache(api));
+  }
+
+  removeRepository(repositoryPath: string): void {
+    this.apis.delete(repositoryPath);
+    this.stackCaches.delete(repositoryPath);
+  }
+
+  getApiForRepository(repositoryPath: string): IStackApi | undefined {
+    return this.apis.get(repositoryPath);
+  }
+
+  private getDefaultApi(): IStackApi | undefined {
+    // Return the first available API if only one repository
+    if (this.apis.size === 1) {
+      return Array.from(this.apis.values())[0];
+    }
+
+    // For multiple repositories, we'll need to determine which one to use
+    // For now, return the first one as a fallback
+    return Array.from(this.apis.values())[0];
+  }
+
+  private getApiForStack(stack: Stack): IStackApi | undefined {
+    // If stack has repository info, use that
+    if (stack.repositoryName) {
+      for (const [path, api] of this.apis.entries()) {
+        const repoName =
+          path.split("\\").pop() || path.split("/").pop() || path;
+        if (repoName === stack.repositoryName) {
+          return api;
+        }
+      }
+    }
+
+    // Fallback to default API
+    return this.getDefaultApi();
   }
 
   private _onDidChangeTreeData: EventEmitter<
@@ -79,11 +131,17 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     this._onDidChangeTreeData.event;
 
   refresh(): void {
-    this.stackCache.clearCache();
+    this.stackCaches.forEach((cache) => cache.clearCache());
     this._onDidChangeTreeData.fire();
   }
 
   async newStack(): Promise<void> {
+    const api = this.getDefaultApi();
+    if (!api) {
+      window.showErrorMessage("No repository available for creating stacks");
+      return;
+    }
+
     const stackName = await window.showInputBox({ prompt: "Enter stack name" });
 
     if (!stackName) {
@@ -91,7 +149,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     }
 
     const branchesOrderedByCommitterDate =
-      await this.api.getBranchesByCommitterDate();
+      await api.getBranchesByCommitterDate();
 
     const sourceBranch = await window.showQuickPick(
       branchesOrderedByCommitterDate,
@@ -160,7 +218,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.api.newStack(stackName, sourceBranch, branchName);
+          await api.newStack(stackName, sourceBranch, branchName);
         } catch (err) {
           window.showErrorMessage(`Error creating stack: ${err}`);
           throw err;
@@ -174,8 +232,14 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   async newBranch(
     stackOrBranch: StackTreeItem | BranchTreeItem
   ): Promise<void> {
+    const api = this.getApiForStack(stackOrBranch.stack);
+    if (!api) {
+      window.showErrorMessage("No API available for this stack's repository");
+      return;
+    }
+
     const branchesOrderedByCommitterDate =
-      await this.api.getBranchesByCommitterDate();
+      await api.getBranchesByCommitterDate();
 
     const createNewBranchQuickPickItem: QuickPickItem = {
       label: "Create new branch",
@@ -225,7 +289,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
         },
         async () => {
           try {
-            await this.api.newBranch(
+            await api.newBranch(
               stackOrBranch.stack.name,
               branchName!,
               stackOrBranch.type === "stack"
@@ -249,7 +313,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
         },
         async () => {
           try {
-            await this.api.addBranch(
+            await api.addBranch(
               stackOrBranch.stack.name,
               branchName!,
               stackOrBranch.type === "stack"
@@ -268,7 +332,13 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async sync(stack: StackTreeItem): Promise<void> {
-    const updateStrategy = await this.api.getUpdateStrategyFromConfig();
+    const api = this.getApiForStack(stack.stack);
+    if (!api) {
+      window.showErrorMessage("No API available for this stack's repository");
+      return;
+    }
+
+    const updateStrategy = await api.getUpdateStrategyFromConfig();
 
     const separator: QuickPickItem = {
       label: "",
@@ -325,9 +395,9 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       async () => {
         try {
           if (confirm === syncStackWithMerge) {
-            await this.api.sync(stack.stack.name, "merge");
+            await api.sync(stack.stack.name, "merge");
           } else if (confirm === syncStackWithRebase) {
-            await this.api.sync(stack.stack.name, "rebase");
+            await api.sync(stack.stack.name, "rebase");
           }
 
           this.refresh();
@@ -339,7 +409,13 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async update(stack: StackTreeItem): Promise<void> {
-    const updateStrategy = await this.api.getUpdateStrategyFromConfig();
+    const api = this.getApiForStack(stack.stack);
+    if (!api) {
+      window.showErrorMessage("No API available for this stack's repository");
+      return;
+    }
+
+    const updateStrategy = await api.getUpdateStrategyFromConfig();
 
     const confirmQuickPickItems: QuickPickItem[] = [];
     const updateStackWithMerge: QuickPickItem = {
@@ -396,9 +472,9 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       async () => {
         try {
           if (confirm === updateStackWithMerge) {
-            await this.api.update(stack.stack.name, "merge");
+            await api.update(stack.stack.name, "merge");
           } else if (confirm === updateStackWithRebase) {
-            await this.api.update(stack.stack.name, "rebase");
+            await api.update(stack.stack.name, "rebase");
           }
 
           this.refresh();
@@ -411,6 +487,12 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async pull(stack: StackTreeItem): Promise<void> {
+    const api = this.getApiForStack(stack.stack);
+    if (!api) {
+      window.showErrorMessage("No API available for this stack's repository");
+      return;
+    }
+
     await window.withProgress(
       {
         location: ProgressLocation.Notification,
@@ -419,7 +501,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.api.pull(stack.stack.name);
+          await api.pull(stack.stack.name);
           this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error pulling changes: ${err}`);
@@ -429,6 +511,12 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async push(stack: StackTreeItem, forceWithLease: boolean): Promise<void> {
+    const api = this.getApiForStack(stack.stack);
+    if (!api) {
+      window.showErrorMessage("No API available for this stack's repository");
+      return;
+    }
+
     await window.withProgress(
       {
         location: ProgressLocation.Notification,
@@ -437,7 +525,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.api.push(stack.stack.name, forceWithLease);
+          await api.push(stack.stack.name, forceWithLease);
           this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error pushing changes: ${err}`);
@@ -447,6 +535,12 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async delete(stack: StackTreeItem): Promise<void> {
+    const api = this.getApiForStack(stack.stack);
+    if (!api) {
+      window.showErrorMessage("No API available for this stack's repository");
+      return;
+    }
+
     const deleteStack: QuickPickItem = {
       label: "Delete Stack",
       detail:
@@ -482,7 +576,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.api.delete(stack.stack.name);
+          await api.delete(stack.stack.name);
           this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error deleting stack: ${err}`);
@@ -493,6 +587,12 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async cleanup(stack: StackTreeItem): Promise<void> {
+    const api = this.getApiForStack(stack.stack);
+    if (!api) {
+      window.showErrorMessage("No API available for this stack's repository");
+      return;
+    }
+
     const cleanupStack: QuickPickItem = {
       label: "Cleanup Stack",
       detail: "Will delete any branches which are no longer on the remote",
@@ -527,7 +627,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.api.cleanup(stack.stack.name);
+          await api.cleanup(stack.stack.name);
           this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error cleaning up stack: ${err}`);
@@ -538,6 +638,12 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async switchTo(branch: string): Promise<void> {
+    const api = this.getDefaultApi();
+    if (!api) {
+      window.showErrorMessage("No API available for switching branches");
+      return;
+    }
+
     await window.withProgress(
       {
         location: ProgressLocation.Notification,
@@ -546,7 +652,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.api.switchToBranch(branch);
+          await api.switchToBranch(branch);
         } catch (err) {
           window.showErrorMessage(`Error switching to branch: ${err}`);
         }
@@ -555,6 +661,12 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   async removeBranchFromStack(branch: BranchTreeItem): Promise<void> {
+    const api = this.getApiForStack(branch.stack);
+    if (!api) {
+      window.showErrorMessage("No API available for this stack's repository");
+      return;
+    }
+
     const removeBranchFromStack: QuickPickItem = {
       label: "Remove Branch",
       detail: "The branch will not be deleted, only removed from the stack.",
@@ -589,7 +701,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
       },
       async () => {
         try {
-          await this.api.removeBranch(branch.stack.name, branch.branch.name);
+          await api.removeBranch(branch.stack.name, branch.branch.name);
           this.refresh();
         } catch (err) {
           window.showErrorMessage(`Error switching to branch: ${err}`);
@@ -603,7 +715,21 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
   }
 
   getTreeItem(element: StackTreeData): TreeItem {
-    if (element.type === "stack") {
+    if (element.type === "repository") {
+      const repositoryTreeItem = new TreeItem(
+        element.repositoryName,
+        TreeItemCollapsibleState.Collapsed
+      );
+      repositoryTreeItem.id = `repo-${element.repositoryPath}`;
+      repositoryTreeItem.iconPath = new ThemeIcon("repo");
+      repositoryTreeItem.description = `${element.stacks.length} ${pluralize(
+        "stack",
+        element.stacks.length
+      )}`;
+      repositoryTreeItem.contextValue = "repository";
+
+      return repositoryTreeItem;
+    } else if (element.type === "stack") {
       const stackTreeItem = new TreeItem(
         element.stack.name,
         TreeItemCollapsibleState.Collapsed
@@ -711,16 +837,51 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
 
   async getChildren(element?: StackTreeData): Promise<StackTreeData[]> {
     if (!element) {
-      const stacks = await this.stackCache.getStacks();
+      // Root level - show repositories if multiple, otherwise show stacks directly
+      const repositoryPaths = Array.from(this.apis.keys());
 
-      return stacks.map((stack) => {
-        return {
+      if (repositoryPaths.length === 0) {
+        return [];
+      }
+
+      if (repositoryPaths.length === 1) {
+        // Single repository - show stacks directly
+        const cache = this.stackCaches.get(repositoryPaths[0])!;
+        const stacks = await cache.getStacks();
+        return stacks.map((stack) => ({
           type: "stack",
           stack,
-        };
-      });
+        }));
+      } else {
+        // Multiple repositories - show repository sections
+        const repositories: RepositoryTreeItem[] = [];
+
+        for (const repositoryPath of repositoryPaths) {
+          const cache = this.stackCaches.get(repositoryPath)!;
+          const stacks = await cache.getStacks();
+          const repositoryName =
+            repositoryPath.split("\\").pop() ||
+            repositoryPath.split("/").pop() ||
+            repositoryPath;
+
+          repositories.push({
+            type: "repository",
+            repositoryName,
+            repositoryPath,
+            stacks,
+          });
+        }
+
+        return repositories;
+      }
     } else {
-      if (element.type === "stack") {
+      if (element.type === "repository") {
+        // Show stacks for this repository
+        return element.stacks.map((stack) => ({
+          type: "stack",
+          stack: { ...stack, repositoryName: element.repositoryName },
+        }));
+      } else if (element.type === "stack") {
         const stackDetails = element.stack;
 
         const branches: BranchTreeItem[] = stackDetails.branches.map(

@@ -40,6 +40,7 @@ export function activate(context: ExtensionContext) {
   disposables.push(logger);
 
   let gitExtension = extensions.getExtension<GitExtension>("vscode.git");
+  let stackDataProvider: StackTreeDataProvider | undefined;
 
   const initialize = () => {
     gitExtension!.activate().then((extension) => {
@@ -51,13 +52,49 @@ export function activate(context: ExtensionContext) {
             return;
           }
 
-          const stackDataProvider = new StackTreeDataProvider(
-            new StackApi(gitAPI.repositories[0], logger)
-          );
+          // Create a single StackTreeDataProvider that manages multiple repositories
+          stackDataProvider = new StackTreeDataProvider();
+
+          // Add all repositories to the data provider
+          gitAPI.repositories.forEach((repo) => {
+            const repoPath = repo.rootUri.fsPath;
+            const repoName =
+              repoPath.split("\\").pop() ||
+              repoPath.split("/").pop() ||
+              repoPath;
+            const stackApi = new StackApi(repo, logger);
+            stackDataProvider!.addRepository(repoPath, repoName, stackApi);
+          });
 
           disposables.push(
             window.registerTreeDataProvider("stack", stackDataProvider)
           );
+
+          // Listen for repository changes
+          const onDidChangeRepositories = () => {
+            if (!stackDataProvider) {
+              return;
+            }
+
+            // Add new repositories
+            gitAPI.repositories.forEach((repo) => {
+              const repoPath = repo.rootUri.fsPath;
+              if (!stackDataProvider!.getApiForRepository(repoPath)) {
+                const repoName =
+                  repoPath.split("\\").pop() ||
+                  repoPath.split("/").pop() ||
+                  repoPath;
+                const stackApi = new StackApi(repo, logger);
+                stackDataProvider!.addRepository(repoPath, repoName, stackApi);
+                stackDataProvider!.refresh();
+              }
+            });
+          };
+
+          // Note: Git API doesn't expose onDidChangeRepositories, so we'll handle this manually
+          // when workspace folders change or through commands
+          gitAPI.onDidOpenRepository(onDidChangeRepositories);
+          gitAPI.onDidCloseRepository(onDidChangeRepositories);
 
           registerCommands(stackDataProvider);
         } else {
