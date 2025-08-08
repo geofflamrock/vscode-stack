@@ -14,3 +14,10 @@
 ## Usage
 
 A new "STACKS" view will appear inside the source control tab in vscode.
+
+## Features
+
+- Manage stacks of branches directly within VS Code.
+- Create, update, sync and delete stacks.
+- Manage branches within stacks.
+- Multi-repository support: when multiple Git repositories are open, a top-level section is shown per repository; with a single repository the view remains flat (no extra level).

@@ -14,6 +14,7 @@ import {
   StackTreeDataProvider,
   StackTreeItem,
 } from "./StackTreeDataProvider";
+import { MultiRepoStackTreeDataProvider } from "./MultiRepoStackTreeDataProvider";
 import { GitExtension } from "./typings/git";
 import { StackApi } from "./stack";
 import * as vscode from "vscode";
@@ -42,7 +43,7 @@ export function activate(context: ExtensionContext) {
   let gitExtension = extensions.getExtension<GitExtension>("vscode.git");
 
   const initialize = () => {
-    gitExtension!.activate().then((extension) => {
+    gitExtension!.activate().then((extension: any) => {
       const onDidChangeGitExtensionEnablement = (enabled: boolean) => {
         if (enabled) {
           const gitAPI = extension.getAPI(1);
@@ -51,15 +52,27 @@ export function activate(context: ExtensionContext) {
             return;
           }
 
-          const stackDataProvider = new StackTreeDataProvider(
-            new StackApi(gitAPI.repositories[0], logger)
+          const perRepoProviders = gitAPI.repositories.map((repo: any) => {
+            const provider = new StackTreeDataProvider(
+              new StackApi(repo, logger)
+            );
+            (provider as any).repositoryPath = repo.rootUri.fsPath;
+            (provider as any).repositoryName = repo.rootUri.path
+              .split(/[/\\]/)
+              .pop();
+            return provider;
+          });
+
+          const aggregatedProvider = new MultiRepoStackTreeDataProvider(
+            perRepoProviders,
+            logger
           );
 
           disposables.push(
-            window.registerTreeDataProvider("stack", stackDataProvider)
+            window.registerTreeDataProvider("stack", aggregatedProvider)
           );
 
-          registerCommands(stackDataProvider);
+          registerCommands(aggregatedProvider);
         } else {
           Disposable.from(...disposables).dispose();
         }
@@ -101,82 +114,68 @@ export function activate(context: ExtensionContext) {
 // This method is called when your extension is deactivated
 export function deactivate() {}
 
-function registerCommands(stackDataProvider: StackTreeDataProvider) {
-  commands.registerCommand("stack.refresh", () => stackDataProvider.refresh());
+function registerCommands(provider: any) {
+  commands.registerCommand("stack.refresh", () => provider.refresh());
   commands.registerCommand("stack.sync", async (stack?: StackTreeItem) => {
     if (stack) {
-      await stackDataProvider.sync(stack);
+      await provider.sync(stack);
     }
   });
   commands.registerCommand("stack.update", async (stack?: StackTreeItem) => {
     if (stack) {
-      await stackDataProvider.update(stack);
+      await provider.update(stack);
     }
   });
-  commands.registerCommand("stack.new", () => stackDataProvider.newStack());
+  commands.registerCommand("stack.new", () => provider.newStack());
   commands.registerCommand("stack.pull", async (stack?: StackTreeItem) => {
     if (stack) {
-      await stackDataProvider.pull(stack);
+      await provider.pull(stack);
     }
   });
   commands.registerCommand("stack.push", async (stack?: StackTreeItem) => {
     if (stack) {
-      await stackDataProvider.push(stack, true);
+      await provider.push(stack, true);
     }
   });
   commands.registerCommand(
     "stack.branch.new",
     async (stack?: StackTreeItem | BranchTreeItem) => {
       if (stack) {
-        await stackDataProvider.newBranch(stack);
+        await provider.newBranch(stack);
       }
     }
   );
-
   commands.registerCommand("stack.delete", async (stack?: StackTreeItem) => {
     if (stack) {
-      await stackDataProvider.delete(stack);
+      await provider.delete(stack);
     }
   });
-
   commands.registerCommand("stack.cleanup", async (stack?: StackTreeItem) => {
     if (stack) {
-      await stackDataProvider.cleanup(stack);
+      await provider.cleanup(stack);
     }
   });
-
   commands.registerCommand(
     "stack.switch",
     async (branchOrStack?: StackTreeItem | BranchTreeItem) => {
       if (branchOrStack) {
-        if (branchOrStack.type === "stack") {
-          await stackDataProvider.switchTo(
-            branchOrStack.stack.sourceBranch.name
-          );
-        } else if (
-          branchOrStack.type === "branch" &&
-          branchOrStack.branch.exists
-        ) {
-          await stackDataProvider.switchTo(branchOrStack.branch.name);
-        }
+        await provider.switchTo(branchOrStack);
       }
     }
   );
-
   commands.registerCommand(
     "stack.branch.remove",
     async (branch?: BranchTreeItem) => {
       if (branch) {
-        await stackDataProvider.removeBranchFromStack(branch);
+        await provider.removeBranchFromStack(branch);
       }
     }
   );
-
   commands.registerCommand(
     "stack.pr.open",
     async (pullRequest?: PullRequestTreeItem) => {
       if (pullRequest) {
-        await stackDataProvider.openPullRequest(pullRequest);
+        await provider.openPullRequest(pullRequest);
       }
     }
   );
