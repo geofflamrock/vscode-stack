@@ -14,8 +14,11 @@ import {
   StackTreeDataProvider,
   StackTreeItem,
 } from "./StackTreeDataProvider";
-import { MultiRepoStackTreeDataProvider } from "./MultiRepoStackTreeDataProvider";
-import { GitExtension } from "./typings/git";
+import {
+  MultiRepoStackTreeDataProvider,
+  RepositoryProviderMetadata,
+} from "./MultiRepoStackTreeDataProvider";
+import { GitExtension, Repository, API } from "./typings/git";
 import { StackApi } from "./stack";
 import * as vscode from "vscode";
 
@@ -43,28 +46,31 @@ export function activate(context: ExtensionContext) {
   let gitExtension = extensions.getExtension<GitExtension>("vscode.git");
 
   const initialize = () => {
-    gitExtension!.activate().then((extension: any) => {
+    gitExtension!.activate().then((extension: GitExtension) => {
       const onDidChangeGitExtensionEnablement = (enabled: boolean) => {
         if (enabled) {
           const gitAPI = extension.getAPI(1);
+
           if (!gitAPI.repositories.length) {
             logger.warn("No git repositories found in the workspace.");
             return;
           }
 
-          const perRepoProviders = gitAPI.repositories.map((repo: any) => {
-            const provider = new StackTreeDataProvider(
-              new StackApi(repo, logger)
-            );
-            (provider as any).repositoryPath = repo.rootUri.fsPath;
-            (provider as any).repositoryName = repo.rootUri.path
-              .split(/[/\\]/)
-              .pop();
-            return provider;
-          });
+          const buildRepoMetadata = (): RepositoryProviderMetadata[] =>
+            gitAPI.repositories.map((repo: Repository) => {
+              const repositoryPath: string = repo.rootUri.fsPath;
+              const repositoryName: string = repo.rootUri.path
+                .split(/[/\\]/)
+                .pop()!;
+              return {
+                provider: new StackTreeDataProvider(new StackApi(repo, logger)),
+                repositoryName,
+                repositoryPath,
+              };
+            });
 
           const aggregatedProvider = new MultiRepoStackTreeDataProvider(
-            perRepoProviders,
+            buildRepoMetadata(),
             logger
           );
 
@@ -73,6 +79,33 @@ export function activate(context: ExtensionContext) {
           );
 
           registerCommands(aggregatedProvider);
+
+          // Listen for repository open/close events (if exposed by API)
+          if (gitAPI.onDidOpenRepository) {
+            disposables.push(
+              gitAPI.onDidOpenRepository((repo: Repository) => {
+                const repositoryPath: string = repo.rootUri.fsPath;
+                const repositoryName: string = repo.rootUri.path
+                  .split(/[/\\]/)
+                  .pop()!;
+                aggregatedProvider.addRepository({
+                  provider: new StackTreeDataProvider(
+                    new StackApi(repo, logger)
+                  ),
+                  repositoryName,
+                  repositoryPath,
+                });
+              })
+            );
+          }
+          if (gitAPI.onDidCloseRepository) {
+            disposables.push(
+              gitAPI.onDidCloseRepository((repo: Repository) => {
+                const repositoryPath: string = repo.rootUri.fsPath;
+                aggregatedProvider.removeRepository(repositoryPath);
+              })
+            );
+          }
         } else {
           Disposable.from(...disposables).dispose();
         }
@@ -114,7 +147,24 @@ export function activate(context: ExtensionContext) {
 // This method is called when your extension is deactivated
 export function deactivate() {}
 
-function registerCommands(provider: any) {
+interface StackCommandsProvider {
+  refresh(): void;
+  sync(stack: StackTreeItem): Promise<void> | void;
+  update(stack: StackTreeItem): Promise<void> | void;
+  newStack(): Promise<void> | void;
+  pull(stack: StackTreeItem): Promise<void> | void;
+  push(stack: StackTreeItem, forceWithLease: boolean): Promise<void> | void;
+  newBranch(
+    stackOrBranch: StackTreeItem | BranchTreeItem
+  ): Promise<void> | void;
+  delete(stack: StackTreeItem): Promise<void> | void;
+  cleanup(stack: StackTreeItem): Promise<void> | void;
+  switchTo(stackOrBranch: StackTreeItem | BranchTreeItem): Promise<void> | void;
+  removeBranchFromStack(branch: BranchTreeItem): Promise<void> | void;
+  openPullRequest(pull: PullRequestTreeItem): void;
+}
+
+function registerCommands(provider: StackCommandsProvider) {
   commands.registerCommand("stack.refresh", () => provider.refresh());
   commands.registerCommand("stack.sync", async (stack?: StackTreeItem) => {
     if (stack) {
