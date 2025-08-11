@@ -42,6 +42,13 @@ export type Stack = {
   branches: StackBranch[];
 };
 
+// Lightweight summary for list views (avoids fetching full branch graph)
+export type StackSummary = {
+  name: string;
+  sourceBranch: string;
+  branchCount: number;
+};
+
 export function canCompareBranchToParent(branch: StackBranch): boolean {
   return (
     branch.exists &&

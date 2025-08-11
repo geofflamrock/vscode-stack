@@ -2,7 +2,6 @@
 // Import the module and reference it with the alias vscode in your code below
 import {
   ExtensionContext,
-  workspace,
   window,
   Disposable,
   commands,
@@ -14,7 +13,11 @@ import {
   StackTreeDataProvider,
   StackTreeItem,
 } from "./StackTreeDataProvider";
-import { GitExtension } from "./typings/git";
+import {
+  MultiRepoStackTreeDataProvider,
+  RepositoryProviderMetadata,
+} from "./MultiRepoStackTreeDataProvider";
+import { GitExtension, Repository, API } from "./typings/git";
 import { StackApi } from "./stack";
 import * as vscode from "vscode";
 
@@ -42,24 +45,52 @@ export function activate(context: ExtensionContext) {
   let gitExtension = extensions.getExtension<GitExtension>("vscode.git");
 
   const initialize = () => {
-    gitExtension!.activate().then((extension) => {
+    gitExtension!.activate().then((extension: GitExtension) => {
       const onDidChangeGitExtensionEnablement = (enabled: boolean) => {
         if (enabled) {
           const gitAPI = extension.getAPI(1);
+
           if (!gitAPI.repositories.length) {
             logger.warn("No git repositories found in the workspace.");
             return;
           }
+          const toRepoMetadata = (
+            repo: Repository
+          ): RepositoryProviderMetadata => {
+            const repositoryPath: string = repo.rootUri.fsPath;
+            const repositoryName: string = repo.rootUri.path
+              .split(/[/\\]/)
+              .pop()!;
+            return {
+              provider: new StackTreeDataProvider(new StackApi(repo, logger)),
+              repositoryName,
+              repositoryPath,
+            };
+          };
 
-          const stackDataProvider = new StackTreeDataProvider(
-            new StackApi(gitAPI.repositories[0], logger)
+          const buildRepoMetadata = (): RepositoryProviderMetadata[] =>
+            gitAPI.repositories.map(toRepoMetadata);
+
+          const aggregatedProvider = new MultiRepoStackTreeDataProvider(
+            buildRepoMetadata(),
+            logger
           );
 
           disposables.push(
-            window.registerTreeDataProvider("stack", stackDataProvider)
+            window.registerTreeDataProvider("stack", aggregatedProvider)
           );
 
-          registerCommands(stackDataProvider);
+          registerCommands(aggregatedProvider);
+
+          disposables.push(
+            gitAPI.onDidOpenRepository((repo: Repository) => {
+              aggregatedProvider.addRepository(toRepoMetadata(repo));
+            }),
+            gitAPI.onDidCloseRepository((repo: Repository) => {
+              const repositoryPath: string = repo.rootUri.fsPath;
+              aggregatedProvider.removeRepository(repositoryPath);
+            })
+          );
         } else {
           Disposable.from(...disposables).dispose();
         }
@@ -101,82 +132,85 @@ export function activate(context: ExtensionContext) {
 // This method is called when your extension is deactivated
 export function deactivate() {}
 
-function registerCommands(stackDataProvider: StackTreeDataProvider) {
-  commands.registerCommand("stack.refresh", () => stackDataProvider.refresh());
+interface StackCommandsProvider {
+  refresh(): void;
+  sync(stack: StackTreeItem): Promise<void> | void;
+  update(stack: StackTreeItem): Promise<void> | void;
+  newStack(): Promise<void> | void;
+  pull(stack: StackTreeItem): Promise<void> | void;
+  push(stack: StackTreeItem, forceWithLease: boolean): Promise<void> | void;
+  newBranch(
+    stackOrBranch: StackTreeItem | BranchTreeItem
+  ): Promise<void> | void;
+  delete(stack: StackTreeItem): Promise<void> | void;
+  cleanup(stack: StackTreeItem): Promise<void> | void;
+  switchTo(stackOrBranch: StackTreeItem | BranchTreeItem): Promise<void> | void;
+  removeBranchFromStack(branch: BranchTreeItem): Promise<void> | void;
+  openPullRequest(pull: PullRequestTreeItem): void;
+}
+
+function registerCommands(provider: StackCommandsProvider) {
+  commands.registerCommand("stack.refresh", () => provider.refresh());
   commands.registerCommand("stack.sync", async (stack?: StackTreeItem) => {
     if (stack) {
-      await stackDataProvider.sync(stack);
+      await provider.sync(stack);
     }
   });
   commands.registerCommand("stack.update", async (stack?: StackTreeItem) => {
     if (stack) {
-      await stackDataProvider.update(stack);
+      await provider.update(stack);
     }
   });
-  commands.registerCommand("stack.new", () => stackDataProvider.newStack());
+  commands.registerCommand("stack.new", () => provider.newStack());
   commands.registerCommand("stack.pull", async (stack?: StackTreeItem) => {
     if (stack) {
-      await stackDataProvider.pull(stack);
+      await provider.pull(stack);
     }
   });
   commands.registerCommand("stack.push", async (stack?: StackTreeItem) => {
     if (stack) {
-      await stackDataProvider.push(stack, true);
+      await provider.push(stack, true);
     }
   });
   commands.registerCommand(
     "stack.branch.new",
     async (stack?: StackTreeItem | BranchTreeItem) => {
       if (stack) {
-        await stackDataProvider.newBranch(stack);
+        await provider.newBranch(stack);
       }
     }
   );
-
   commands.registerCommand("stack.delete", async (stack?: StackTreeItem) => {
     if (stack) {
-      await stackDataProvider.delete(stack);
+      await provider.delete(stack);
     }
   });
-
   commands.registerCommand("stack.cleanup", async (stack?: StackTreeItem) => {
     if (stack) {
-      await stackDataProvider.cleanup(stack);
+      await provider.cleanup(stack);
     }
   });
-
   commands.registerCommand(
     "stack.switch",
     async (branchOrStack?: StackTreeItem | BranchTreeItem) => {
       if (branchOrStack) {
-        if (branchOrStack.type === "stack") {
-          await stackDataProvider.switchTo(
-            branchOrStack.stack.sourceBranch.name
-          );
-        } else if (
-          branchOrStack.type === "branch" &&
-          branchOrStack.branch.exists
-        ) {
-          await stackDataProvider.switchTo(branchOrStack.branch.name);
-        }
+        await provider.switchTo(branchOrStack);
       }
     }
   );
-
   commands.registerCommand(
     "stack.branch.remove",
     async (branch?: BranchTreeItem) => {
       if (branch) {
-        await stackDataProvider.removeBranchFromStack(branch);
+        await provider.removeBranchFromStack(branch);
       }
     }
   );
-
   commands.registerCommand(
     "stack.pr.open",
     async (pullRequest?: PullRequestTreeItem) => {
       if (pullRequest) {
-        await stackDataProvider.openPullRequest(pullRequest);
+        await provider.openPullRequest(pullRequest);
       }
     }
   );

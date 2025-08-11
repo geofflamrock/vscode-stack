@@ -72,6 +72,11 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     this.stackCache = new StackCache(api);
   }
 
+  // Expose API for higher-level aggregating providers (multi-repo) to query lightweight summaries
+  public getApi(): IStackApi {
+    return this.api;
+  }
+
   private _onDidChangeTreeData: EventEmitter<
     StackTreeData | undefined | null | void
   > = new EventEmitter<StackTreeData | undefined | null | void>();

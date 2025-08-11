@@ -1,13 +1,15 @@
 import { LogOutputChannel } from "vscode";
-import { Stack } from "../types";
+import { Stack, StackSummary } from "../types";
 import { Repository } from "../typings/git";
 import * as cp from "child_process";
 import { EOL } from "os";
 
 type UpdateStrategy = "merge" | "rebase";
 
+
 export interface IStackApi {
   getStacks(): Promise<Stack[]>;
+  getStackSummaries(): Promise<StackSummary[]>;
   getBranchesByCommitterDate(): Promise<string[]>;
   getUpdateStrategyFromConfig(): Promise<UpdateStrategy | undefined>;
 
@@ -49,6 +51,14 @@ export class StackApi implements IStackApi {
     );
 
     return stacks;
+  }
+
+  async getStackSummaries(): Promise<StackSummary[]> {
+    const result = await this.execJson<{ stacks: StackSummary[] }>(
+      `stack list --json --working-dir "${this.workingDirectory()}"`,
+      false
+    );
+    return result.stacks || [];
   }
 
   async getBranchesByCommitterDate(): Promise<string[]> {
