@@ -32,9 +32,6 @@ export type RepositoryRootTreeItem = {
 
 export type AggregatedTreeItem = StackTreeData | RepositoryRootTreeItem;
 
-// We augment returned stack/branch/pr items with a hidden reference to their provider for routing commands.
-// Note: we dynamically augment tree items with a __provider field (typed as any) for routing.
-
 export class MultiRepoStackTreeDataProvider
   implements TreeDataProvider<AggregatedTreeItem>
 {
@@ -217,7 +214,7 @@ export class MultiRepoStackTreeDataProvider
       item.tooltip = `${count} stack${count === 1 ? "" : "s"}`;
       return item;
     }
-    return this.providerFromElement(element).getTreeItem(element as any);
+    return this.providerFromElement(element).getTreeItem(element);
   }
 
   async getChildren(
