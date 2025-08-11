@@ -6,11 +6,15 @@ import { EOL } from "os";
 
 type UpdateStrategy = "merge" | "rebase";
 
+export type StackSummary = {
+  name: string;
+  sourceBranch: string;
+  branchCount: number;
+};
+
 export interface IStackApi {
   getStacks(): Promise<Stack[]>;
-  getStackSummaries(): Promise<
-    { name: string; sourceBranch: string; branchCount: number }[]
-  >;
+  getStackSummaries(): Promise<StackSummary[]>;
   getBranchesByCommitterDate(): Promise<string[]>;
   getUpdateStrategyFromConfig(): Promise<UpdateStrategy | undefined>;
 
@@ -54,16 +58,11 @@ export class StackApi implements IStackApi {
     return stacks;
   }
 
-  async getStackSummaries(): Promise<
-    {
-      name: string;
-      sourceBranch: string;
-      branchCount: number;
-    }[]
-  > {
-    const result = await this.execJson<{
-      stacks: { name: string; sourceBranch: string; branchCount: number }[];
-    }>(`stack list --json --working-dir "${this.workingDirectory()}"`, false);
+  async getStackSummaries(): Promise<StackSummary[]> {
+    const result = await this.execJson<{ stacks: StackSummary[] }>(
+      `stack list --json --working-dir "${this.workingDirectory()}"`,
+      false
+    );
     return result.stacks || [];
   }
 

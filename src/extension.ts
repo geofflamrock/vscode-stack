@@ -2,7 +2,6 @@
 // Import the module and reference it with the alias vscode in your code below
 import {
   ExtensionContext,
-  workspace,
   window,
   Disposable,
   commands,
@@ -55,19 +54,22 @@ export function activate(context: ExtensionContext) {
             logger.warn("No git repositories found in the workspace.");
             return;
           }
+          const toRepoMetadata = (
+            repo: Repository
+          ): RepositoryProviderMetadata => {
+            const repositoryPath: string = repo.rootUri.fsPath;
+            const repositoryName: string = repo.rootUri.path
+              .split(/[/\\]/)
+              .pop()!;
+            return {
+              provider: new StackTreeDataProvider(new StackApi(repo, logger)),
+              repositoryName,
+              repositoryPath,
+            };
+          };
 
           const buildRepoMetadata = (): RepositoryProviderMetadata[] =>
-            gitAPI.repositories.map((repo: Repository) => {
-              const repositoryPath: string = repo.rootUri.fsPath;
-              const repositoryName: string = repo.rootUri.path
-                .split(/[/\\]/)
-                .pop()!;
-              return {
-                provider: new StackTreeDataProvider(new StackApi(repo, logger)),
-                repositoryName,
-                repositoryPath,
-              };
-            });
+            gitAPI.repositories.map(toRepoMetadata);
 
           const aggregatedProvider = new MultiRepoStackTreeDataProvider(
             buildRepoMetadata(),
@@ -80,32 +82,15 @@ export function activate(context: ExtensionContext) {
 
           registerCommands(aggregatedProvider);
 
-          // Listen for repository open/close events (if exposed by API)
-          if (gitAPI.onDidOpenRepository) {
-            disposables.push(
-              gitAPI.onDidOpenRepository((repo: Repository) => {
-                const repositoryPath: string = repo.rootUri.fsPath;
-                const repositoryName: string = repo.rootUri.path
-                  .split(/[/\\]/)
-                  .pop()!;
-                aggregatedProvider.addRepository({
-                  provider: new StackTreeDataProvider(
-                    new StackApi(repo, logger)
-                  ),
-                  repositoryName,
-                  repositoryPath,
-                });
-              })
-            );
-          }
-          if (gitAPI.onDidCloseRepository) {
-            disposables.push(
-              gitAPI.onDidCloseRepository((repo: Repository) => {
-                const repositoryPath: string = repo.rootUri.fsPath;
-                aggregatedProvider.removeRepository(repositoryPath);
-              })
-            );
-          }
+          disposables.push(
+            gitAPI.onDidOpenRepository((repo: Repository) => {
+              aggregatedProvider.addRepository(toRepoMetadata(repo));
+            }),
+            gitAPI.onDidCloseRepository((repo: Repository) => {
+              const repositoryPath: string = repo.rootUri.fsPath;
+              aggregatedProvider.removeRepository(repositoryPath);
+            })
+          );
         } else {
           Disposable.from(...disposables).dispose();
         }
