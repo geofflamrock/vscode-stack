@@ -8,6 +8,9 @@ type UpdateStrategy = "merge" | "rebase";
 
 export interface IStackApi {
   getStacks(): Promise<Stack[]>;
+  getStackSummaries(): Promise<
+    { name: string; sourceBranch: string; branchCount: number }[]
+  >;
   getBranchesByCommitterDate(): Promise<string[]>;
   getUpdateStrategyFromConfig(): Promise<UpdateStrategy | undefined>;
 
@@ -49,6 +52,19 @@ export class StackApi implements IStackApi {
     );
 
     return stacks;
+  }
+
+  async getStackSummaries(): Promise<
+    {
+      name: string;
+      sourceBranch: string;
+      branchCount: number;
+    }[]
+  > {
+    const result = await this.execJson<{
+      stacks: { name: string; sourceBranch: string; branchCount: number }[];
+    }>(`stack list --json --working-dir "${this.workingDirectory()}"`, false);
+    return result.stacks || [];
   }
 
   async getBranchesByCommitterDate(): Promise<string[]> {

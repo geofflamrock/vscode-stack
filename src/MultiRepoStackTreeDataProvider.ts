@@ -21,6 +21,7 @@ export type RepositoryRootTreeItem = {
   type: "repositoryRoot";
   name: string; // repository folder name
   provider: StackTreeDataProvider;
+  stackCount?: number;
 };
 
 export type AggregatedTreeItem = StackTreeData | RepositoryRootTreeItem;
@@ -143,6 +144,9 @@ export class MultiRepoStackTreeDataProvider
       );
       item.iconPath = new ThemeIcon("repo");
       item.contextValue = "repositoryRoot";
+      const count = element.stackCount ?? 0;
+      item.description = `${count} stack${count === 1 ? "" : "s"}`;
+      item.tooltip = `${count} stack${count === 1 ? "" : "s"}`;
       return item;
     }
     return this.providerFromElement(element).getTreeItem(element as any);
@@ -159,15 +163,35 @@ export class MultiRepoStackTreeDataProvider
         children.forEach((c) => ((c as any).__provider = provider));
         return children;
       }
-      return this.providers.map((p) => {
-        const repoName = (p as any).repositoryName ?? "Repository";
-        const root: RepositoryRootTreeItem = {
-          type: "repositoryRoot",
-          name: repoName,
-          provider: p,
-        };
-        return root;
-      });
+      // Eagerly load counts for each repository
+      const results = await Promise.all(
+        this.providers.map(async (p) => {
+          const repoName = (p as any).repositoryName ?? "Repository";
+          try {
+            const api: any = (p as any).getApi
+              ? (p as any).getApi()
+              : undefined;
+            const summaries = api?.getStackSummaries
+              ? await api.getStackSummaries()
+              : [];
+            return { provider: p, repoName, count: summaries.length };
+          } catch (err: any) {
+            this.logger.error(
+              `Failed to load stack summaries for ${repoName}: ${err}`
+            );
+            return { provider: p, repoName, count: 0 };
+          }
+        })
+      );
+      return results.map(
+        (r) =>
+          ({
+            type: "repositoryRoot",
+            name: r.repoName,
+            provider: r.provider,
+            stackCount: r.count,
+          } as RepositoryRootTreeItem)
+      );
     }
 
     if (element.type === "repositoryRoot") {
