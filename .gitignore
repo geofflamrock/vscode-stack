@@ -2,3 +2,4 @@ node_modules
 out
 artifacts
 *.vsix
+.vscode-test

@@ -1,16 +1,11 @@
 import { LogOutputChannel } from "vscode";
-import { Stack } from "../types";
+import { Stack, StackSummary } from "../types";
 import { Repository } from "../typings/git";
 import * as cp from "child_process";
 import { EOL } from "os";
 
 type UpdateStrategy = "merge" | "rebase";
 
-export type StackSummary = {
-  name: string;
-  sourceBranch: string;
-  branchCount: number;
-};
 
 export interface IStackApi {
   getStacks(): Promise<Stack[]>;
