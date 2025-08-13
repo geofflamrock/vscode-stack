@@ -65,7 +65,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
 
     constructor(
         private api: IStackApi,
-        private repositoryId?: string,
+        private repositoryId: string,
     ) {
         this.stackCache = new StackCache(api);
     }
@@ -579,9 +579,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
                 element.stack.name,
                 TreeItemCollapsibleState.Collapsed,
             );
-            stackTreeItem.id = this.repositoryId
-                ? `${this.repositoryId}:${element.stack.name}`
-                : element.stack.name;
+            stackTreeItem.id = `${this.repositoryId}:${element.stack.name}`;
             stackTreeItem.iconPath = new ThemeIcon("layers");
 
             let description = element.stack.sourceBranch.name;
