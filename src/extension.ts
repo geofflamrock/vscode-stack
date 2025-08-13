@@ -51,18 +51,37 @@ export function activate(context: ExtensionContext) {
                     const toRepoMetadata = (repo: Repository): RepositoryProviderMetadata => {
                         const repositoryPath: string = repo.rootUri.fsPath;
                         const repositoryName: string = repo.rootUri.path.split(/[/\\]/).pop()!;
+                        const provider = new StackTreeDataProvider(new StackApi(repo, logger));
                         return {
-                            provider: new StackTreeDataProvider(new StackApi(repo, logger)),
+                            provider,
                             repositoryName,
                             repositoryPath,
                         };
                     };
 
-                    const buildRepoMetadata = (): RepositoryProviderMetadata[] =>
-                        gitAPI.repositories.map(toRepoMetadata);
+                    const subscribeToRepoStateChange = (
+                        repo: Repository,
+                        metadata: RepositoryProviderMetadata,
+                    ) => {
+                        const stateChangeListener = repo.state.onDidChange(() => {
+                            logger.info(
+                                `Repository state changed for ${metadata.repositoryName}, refreshing stack list`,
+                            );
+                            metadata.provider.refresh();
+                        });
+                        disposables.push(stateChangeListener);
+                    };
+
+                    const repoMetadata: RepositoryProviderMetadata[] = [];
+
+                    for (const repo of gitAPI.repositories) {
+                        const metadata = toRepoMetadata(repo);
+                        subscribeToRepoStateChange(repo, metadata);
+                        repoMetadata.push(metadata);
+                    }
 
                     const aggregatedProvider = new MultiRepoStackTreeDataProvider(
-                        buildRepoMetadata(),
+                        repoMetadata,
                         logger,
                     );
 
@@ -72,7 +91,9 @@ export function activate(context: ExtensionContext) {
 
                     disposables.push(
                         gitAPI.onDidOpenRepository((repo: Repository) => {
-                            aggregatedProvider.addRepository(toRepoMetadata(repo));
+                            const metadata = toRepoMetadata(repo);
+                            subscribeToRepoStateChange(repo, metadata);
+                            aggregatedProvider.addRepository(metadata);
                         }),
                         gitAPI.onDidCloseRepository((repo: Repository) => {
                             const repositoryPath: string = repo.rootUri.fsPath;
