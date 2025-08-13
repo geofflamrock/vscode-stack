@@ -52,7 +52,10 @@ export function activate(context: ExtensionContext) {
                         const repositoryPath: string = repo.rootUri.fsPath;
                         const repositoryName: string = repo.rootUri.path.split(/[/\\]/).pop()!;
                         return {
-                            provider: new StackTreeDataProvider(new StackApi(repo, logger)),
+                            provider: new StackTreeDataProvider(
+                                new StackApi(repo, logger),
+                                repositoryPath,
+                            ),
                             repositoryName,
                             repositoryPath,
                         };

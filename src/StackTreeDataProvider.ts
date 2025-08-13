@@ -63,7 +63,10 @@ const enum GlyphChars {
 export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     private stackCache: StackCache;
 
-    constructor(private api: IStackApi) {
+    constructor(
+        private api: IStackApi,
+        private repositoryId: string,
+    ) {
         this.stackCache = new StackCache(api);
     }
 
@@ -576,7 +579,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
                 element.stack.name,
                 TreeItemCollapsibleState.Collapsed,
             );
-            stackTreeItem.id = element.stack.name;
+            stackTreeItem.id = `${this.repositoryId}:${element.stack.name}`;
             stackTreeItem.iconPath = new ThemeIcon("layers");
 
             let description = element.stack.sourceBranch.name;
