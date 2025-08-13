@@ -59,26 +59,29 @@ export function activate(context: ExtensionContext) {
                         };
                     };
 
-                    const buildRepoMetadata = (): RepositoryProviderMetadata[] => {
-                        return gitAPI.repositories.map((repo) => {
-                            const metadata = toRepoMetadata(repo);
-
-                            // Listen for repository state changes (including fetch operations)
-                            // and refresh the stack list when they occur
-                            const stateChangeListener = repo.state.onDidChange(() => {
-                                logger.info(
-                                    `Repository state changed for ${metadata.repositoryName}, refreshing stack list`,
-                                );
-                                metadata.provider.refresh();
-                            });
-                            disposables.push(stateChangeListener);
-
-                            return metadata;
+                    const subscribeToRepoStateChange = (
+                        repo: Repository,
+                        metadata: RepositoryProviderMetadata,
+                    ) => {
+                        const stateChangeListener = repo.state.onDidChange(() => {
+                            logger.info(
+                                `Repository state changed for ${metadata.repositoryName}, refreshing stack list`,
+                            );
+                            metadata.provider.refresh();
                         });
+                        disposables.push(stateChangeListener);
                     };
 
+                    const repoMetadata: RepositoryProviderMetadata[] = [];
+
+                    for (const repo of gitAPI.repositories) {
+                        const metadata = toRepoMetadata(repo);
+                        subscribeToRepoStateChange(repo, metadata);
+                        repoMetadata.push(metadata);
+                    }
+
                     const aggregatedProvider = new MultiRepoStackTreeDataProvider(
-                        buildRepoMetadata(),
+                        repoMetadata,
                         logger,
                     );
 
@@ -89,16 +92,7 @@ export function activate(context: ExtensionContext) {
                     disposables.push(
                         gitAPI.onDidOpenRepository((repo: Repository) => {
                             const metadata = toRepoMetadata(repo);
-
-                            // Listen for repository state changes for the new repository
-                            const stateChangeListener = repo.state.onDidChange(() => {
-                                logger.info(
-                                    `Repository state changed for ${metadata.repositoryName}, refreshing stack list`,
-                                );
-                                metadata.provider.refresh();
-                            });
-                            disposables.push(stateChangeListener);
-
+                            subscribeToRepoStateChange(repo, metadata);
                             aggregatedProvider.addRepository(metadata);
                         }),
                         gitAPI.onDidCloseRepository((repo: Repository) => {
