@@ -51,15 +51,31 @@ export function activate(context: ExtensionContext) {
                     const toRepoMetadata = (repo: Repository): RepositoryProviderMetadata => {
                         const repositoryPath: string = repo.rootUri.fsPath;
                         const repositoryName: string = repo.rootUri.path.split(/[/\\]/).pop()!;
+                        const provider = new StackTreeDataProvider(new StackApi(repo, logger));
                         return {
-                            provider: new StackTreeDataProvider(new StackApi(repo, logger)),
+                            provider,
                             repositoryName,
                             repositoryPath,
                         };
                     };
 
-                    const buildRepoMetadata = (): RepositoryProviderMetadata[] =>
-                        gitAPI.repositories.map(toRepoMetadata);
+                    const buildRepoMetadata = (): RepositoryProviderMetadata[] => {
+                        return gitAPI.repositories.map((repo) => {
+                            const metadata = toRepoMetadata(repo);
+
+                            // Listen for repository state changes (including fetch operations)
+                            // and refresh the stack list when they occur
+                            const stateChangeListener = repo.state.onDidChange(() => {
+                                logger.info(
+                                    `Repository state changed for ${metadata.repositoryName}, refreshing stack list`,
+                                );
+                                metadata.provider.refresh();
+                            });
+                            disposables.push(stateChangeListener);
+
+                            return metadata;
+                        });
+                    };
 
                     const aggregatedProvider = new MultiRepoStackTreeDataProvider(
                         buildRepoMetadata(),
@@ -72,7 +88,18 @@ export function activate(context: ExtensionContext) {
 
                     disposables.push(
                         gitAPI.onDidOpenRepository((repo: Repository) => {
-                            aggregatedProvider.addRepository(toRepoMetadata(repo));
+                            const metadata = toRepoMetadata(repo);
+
+                            // Listen for repository state changes for the new repository
+                            const stateChangeListener = repo.state.onDidChange(() => {
+                                logger.info(
+                                    `Repository state changed for ${metadata.repositoryName}, refreshing stack list`,
+                                );
+                                metadata.provider.refresh();
+                            });
+                            disposables.push(stateChangeListener);
+
+                            aggregatedProvider.addRepository(metadata);
                         }),
                         gitAPI.onDidCloseRepository((repo: Repository) => {
                             const repositoryPath: string = repo.rootUri.fsPath;
