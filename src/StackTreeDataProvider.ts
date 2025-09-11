@@ -3,9 +3,10 @@ import {
     commands,
     Event,
     EventEmitter,
-    ProgressLocation,
     QuickPickItem,
     QuickPickItemKind,
+    StatusBarAlignment,
+    StatusBarItem,
     ThemeColor,
     ThemeIcon,
     TreeDataProvider,
@@ -62,12 +63,19 @@ const enum GlyphChars {
 
 export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     private stackCache: StackCache;
+    private statusBarItem: StatusBarItem;
 
     constructor(
         private api: IStackApi,
         private repositoryId: string,
     ) {
         this.stackCache = new StackCache(api);
+        // Primary status bar (left) item to show stack operation progress
+        this.statusBarItem = window.createStatusBarItem(
+            `stackProgress:${repositoryId}`,
+            StatusBarAlignment.Left,
+        );
+        this.statusBarItem.name = `Stack (${repositoryId})`;
     }
 
     // Expose API for higher-level aggregating providers (multi-repo) to query lightweight summaries
@@ -83,6 +91,18 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     refresh(): void {
         this.stackCache.clearCache();
         this._onDidChangeTreeData.fire();
+    }
+
+    private async runWithStatus<T>(title: string, fn: () => Promise<T>): Promise<T> {
+        this.statusBarItem.text = `$(sync~spin) ${title}`;
+        this.statusBarItem.tooltip = title;
+        this.statusBarItem.show();
+        try {
+            const result = await fn();
+            return result;
+        } finally {
+            this.statusBarItem.hide();
+        }
     }
 
     async newStack(): Promise<void> {
@@ -151,21 +171,14 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
             branchName = branchNameSelection.label;
         }
 
-        await window.withProgress(
-            {
-                location: ProgressLocation.Notification,
-                title: `Creating stack '${stackName}'`,
-                cancellable: false,
-            },
-            async () => {
-                try {
-                    await this.api.newStack(stackName, sourceBranch, branchName);
-                } catch (err) {
-                    window.showErrorMessage(`Error creating stack: ${err}`);
-                    throw err;
-                }
-            },
-        );
+        try {
+            await this.runWithStatus(`Creating stack '${stackName}'`, async () => {
+                await this.api.newStack(stackName, sourceBranch, branchName);
+            });
+        } catch (err) {
+            window.showErrorMessage(`Error creating stack: ${err}`);
+            throw err;
+        }
 
         this.refresh();
     }
@@ -214,14 +227,10 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
                 return;
             }
 
-            await window.withProgress(
-                {
-                    location: ProgressLocation.Notification,
-                    title: `Creating new branch '${branchName}' in stack '${stackOrBranch.stack.name}'`,
-                    cancellable: false,
-                },
-                async () => {
-                    try {
+            try {
+                await this.runWithStatus(
+                    `Creating new branch '${branchName}' in stack '${stackOrBranch.stack.name}'`,
+                    async () => {
                         await this.api.newBranch(
                             stackOrBranch.stack.name,
                             branchName!,
@@ -229,23 +238,18 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
                                 ? stackOrBranch.stack.sourceBranch.name
                                 : stackOrBranch.branch.name,
                         );
-                    } catch (err) {
-                        window.showErrorMessage(`Error creating branch in stack: ${err}`);
-                        throw err;
-                    }
-                },
-            );
+                    },
+                );
+            } catch (err) {
+                window.showErrorMessage(`Error creating branch in stack: ${err}`);
+                throw err;
+            }
         } else {
             branchName = branchNameSelection.label;
-
-            await window.withProgress(
-                {
-                    location: ProgressLocation.Notification,
-                    title: `Adding branch '${branchName}' to stack '${stackOrBranch.stack.name}'`,
-                    cancellable: false,
-                },
-                async () => {
-                    try {
+            try {
+                await this.runWithStatus(
+                    `Adding branch '${branchName}' to stack '${stackOrBranch.stack.name}'`,
+                    async () => {
                         await this.api.addBranch(
                             stackOrBranch.stack.name,
                             branchName!,
@@ -253,12 +257,12 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
                                 ? stackOrBranch.stack.sourceBranch.name
                                 : stackOrBranch.branch.name,
                         );
-                    } catch (err) {
-                        window.showErrorMessage(`Error adding branch to stack: ${err}`);
-                        throw err;
-                    }
-                },
-            );
+                    },
+                );
+            } catch (err) {
+                window.showErrorMessage(`Error adding branch to stack: ${err}`);
+                throw err;
+            }
         }
 
         this.refresh();
@@ -305,26 +309,21 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
             return;
         }
 
-        await window.withProgress(
-            {
-                location: ProgressLocation.Notification,
-                title: `Syncing stack '${stack.stack.name}' with remote`,
-                cancellable: false,
-            },
-            async () => {
-                try {
+        try {
+            await this.runWithStatus(
+                `Syncing stack '${stack.stack.name}' with remote`,
+                async () => {
                     if (confirm === syncStackWithMerge) {
                         await this.api.sync(stack.stack.name, "merge");
                     } else if (confirm === syncStackWithRebase) {
                         await this.api.sync(stack.stack.name, "rebase");
                     }
-
-                    this.refresh();
-                } catch (err) {
-                    window.showErrorMessage(`Error syncing changes: ${err}`);
-                }
-            },
-        );
+                },
+            );
+            this.refresh();
+        } catch (err) {
+            window.showErrorMessage(`Error syncing changes: ${err}`);
+        }
     }
 
     async update(stack: StackTreeItem): Promise<void> {
@@ -368,63 +367,50 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
             return;
         }
 
-        await window.withProgress(
-            {
-                location: ProgressLocation.Notification,
-                title: `Updating stack '${stack.stack.name}' with remote`,
-                cancellable: false,
-            },
-            async () => {
-                try {
+        try {
+            await this.runWithStatus(
+                `Updating stack '${stack.stack.name}' with remote`,
+                async () => {
                     if (confirm === updateStackWithMerge) {
                         await this.api.update(stack.stack.name, "merge");
                     } else if (confirm === updateStackWithRebase) {
                         await this.api.update(stack.stack.name, "rebase");
                     }
-
-                    this.refresh();
-                } catch (err) {
-                    window.showErrorMessage(`Error updating changes: ${err}`);
-                    throw err;
-                }
-            },
-        );
+                },
+            );
+            this.refresh();
+        } catch (err) {
+            window.showErrorMessage(`Error updating changes: ${err}`);
+            throw err;
+        }
     }
 
     async pull(stack: StackTreeItem): Promise<void> {
-        await window.withProgress(
-            {
-                location: ProgressLocation.Notification,
-                title: `Pulling changes for stack '${stack.stack.name}'`,
-                cancellable: false,
-            },
-            async () => {
-                try {
+        try {
+            await this.runWithStatus(
+                `Pulling changes for stack '${stack.stack.name}'`,
+                async () => {
                     await this.api.pull(stack.stack.name);
-                    this.refresh();
-                } catch (err) {
-                    window.showErrorMessage(`Error pulling changes: ${err}`);
-                }
-            },
-        );
+                },
+            );
+            this.refresh();
+        } catch (err) {
+            window.showErrorMessage(`Error pulling changes: ${err}`);
+        }
     }
 
     async push(stack: StackTreeItem, forceWithLease: boolean): Promise<void> {
-        await window.withProgress(
-            {
-                location: ProgressLocation.Notification,
-                title: `Pushing changes for stack '${stack.stack.name}'`,
-                cancellable: false,
-            },
-            async () => {
-                try {
+        try {
+            await this.runWithStatus(
+                `Pushing changes for stack '${stack.stack.name}'`,
+                async () => {
                     await this.api.push(stack.stack.name, forceWithLease);
-                    this.refresh();
-                } catch (err) {
-                    window.showErrorMessage(`Error pushing changes: ${err}`);
-                }
-            },
-        );
+                },
+            );
+            this.refresh();
+        } catch (err) {
+            window.showErrorMessage(`Error pushing changes: ${err}`);
+        }
     }
 
     async delete(stack: StackTreeItem): Promise<void> {
@@ -451,22 +437,15 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
             return;
         }
 
-        await window.withProgress(
-            {
-                location: ProgressLocation.Notification,
-                title: `Deleting stack '${stack.stack.name}'`,
-                cancellable: false,
-            },
-            async () => {
-                try {
-                    await this.api.delete(stack.stack.name);
-                    this.refresh();
-                } catch (err) {
-                    window.showErrorMessage(`Error deleting stack: ${err}`);
-                    throw err;
-                }
-            },
-        );
+        try {
+            await this.runWithStatus(`Deleting stack '${stack.stack.name}'`, async () => {
+                await this.api.delete(stack.stack.name);
+            });
+            this.refresh();
+        } catch (err) {
+            window.showErrorMessage(`Error deleting stack: ${err}`);
+            throw err;
+        }
     }
 
     async cleanup(stack: StackTreeItem): Promise<void> {
@@ -493,39 +472,25 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
             return;
         }
 
-        await window.withProgress(
-            {
-                location: ProgressLocation.Notification,
-                title: `Cleaning up stack '${stack.stack.name}'`,
-                cancellable: false,
-            },
-            async () => {
-                try {
-                    await this.api.cleanup(stack.stack.name);
-                    this.refresh();
-                } catch (err) {
-                    window.showErrorMessage(`Error cleaning up stack: ${err}`);
-                    throw err;
-                }
-            },
-        );
+        try {
+            await this.runWithStatus(`Cleaning up stack '${stack.stack.name}'`, async () => {
+                await this.api.cleanup(stack.stack.name);
+            });
+            this.refresh();
+        } catch (err) {
+            window.showErrorMessage(`Error cleaning up stack: ${err}`);
+            throw err;
+        }
     }
 
     async switchTo(branch: string): Promise<void> {
-        await window.withProgress(
-            {
-                location: ProgressLocation.Notification,
-                title: `Switching to branch '${branch}'`,
-                cancellable: false,
-            },
-            async () => {
-                try {
-                    await this.api.switchToBranch(branch);
-                } catch (err) {
-                    window.showErrorMessage(`Error switching to branch: ${err}`);
-                }
-            },
-        );
+        try {
+            await this.runWithStatus(`Switching to branch '${branch}'`, async () => {
+                await this.api.switchToBranch(branch);
+            });
+        } catch (err) {
+            window.showErrorMessage(`Error switching to branch: ${err}`);
+        }
     }
 
     async removeBranchFromStack(branch: BranchTreeItem): Promise<void> {
@@ -552,21 +517,17 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
             return;
         }
 
-        await window.withProgress(
-            {
-                location: ProgressLocation.Notification,
-                title: `Removing branch '${branch.branch.name}' from stack '${branch.stack.name}'`,
-                cancellable: false,
-            },
-            async () => {
-                try {
+        try {
+            await this.runWithStatus(
+                `Removing branch '${branch.branch.name}' from stack '${branch.stack.name}'`,
+                async () => {
                     await this.api.removeBranch(branch.stack.name, branch.branch.name);
-                    this.refresh();
-                } catch (err) {
-                    window.showErrorMessage(`Error switching to branch: ${err}`);
-                }
-            },
-        );
+                },
+            );
+            this.refresh();
+        } catch (err) {
+            window.showErrorMessage(`Error switching to branch: ${err}`);
+        }
     }
 
     openPullRequest(pullRequest: PullRequestTreeItem): void {
