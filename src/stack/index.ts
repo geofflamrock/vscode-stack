@@ -6,6 +6,15 @@ import { EOL } from "os";
 
 type UpdateStrategy = "merge" | "rebase";
 
+// Structured log event emitted on stderr by the stack CLI.
+// Allow unknown extra properties while strongly typing the primary ones we use.
+interface StackCliLogEvent {
+    EventId: number;
+    LogLevel: "Trace" | "Debug" | "Information" | "Warning" | "Error" | "Critical";
+    Category: string;
+    Message: string;
+}
+
 export interface IStackApi {
     getStacks(): Promise<Stack[]>;
     getStackSummaries(): Promise<StackSummary[]>;
@@ -34,6 +43,9 @@ export class StackApi implements IStackApi {
         private readonly _repository: Repository,
         private readonly _logger: LogOutputChannel,
     ) {}
+
+    // Buffer for partial stderr line fragments while streaming
+    private _stderrLineBuffer: string = "";
 
     private workingDirectory(): string {
         return this._repository.rootUri.fsPath;
@@ -84,7 +96,7 @@ export class StackApi implements IStackApi {
     }
 
     async newStack(name: string, sourceBranch: string, branchName?: string): Promise<void> {
-        let cmd = `stack new --name "${name}" --source-branch "${sourceBranch}" --working-dir "${this.workingDirectory()}"`;
+        let cmd = `stack new --name "${name}" --source-branch "${sourceBranch}" --working-dir "${this.workingDirectory()}" --json`;
 
         if (branchName) {
             cmd += ` --branch ${branchName}`;
@@ -94,17 +106,17 @@ export class StackApi implements IStackApi {
     }
 
     async newBranch(stack: string, name: string, parent: string): Promise<void> {
-        let cmd = `stack branch new --stack "${stack}" --branch "${name}" --parent "${parent}" --working-dir "${this.workingDirectory()}"`;
+        let cmd = `stack branch new --stack "${stack}" --branch "${name}" --parent "${parent}" --working-dir "${this.workingDirectory()}" --json`;
         await this.exec(cmd);
     }
 
     async addBranch(stack: string, name: string, parent: string): Promise<void> {
-        let cmd = `stack branch add --stack "${stack}" --branch "${name}" --parent "${parent}" --working-dir "${this.workingDirectory()}"`;
+        let cmd = `stack branch add --stack "${stack}" --branch "${name}" --parent "${parent}" --working-dir "${this.workingDirectory()}" --json`;
         await this.exec(cmd);
     }
 
     async removeBranch(stack: string, name: string): Promise<void> {
-        let cmd = `stack branch remove --stack "${stack}" --branch "${name}" --working-dir "${this.workingDirectory()}" --yes`;
+        let cmd = `stack branch remove --stack "${stack}" --branch "${name}" --working-dir "${this.workingDirectory()}" --yes --json`;
         await this.exec(cmd);
     }
 
@@ -112,19 +124,21 @@ export class StackApi implements IStackApi {
         await this.exec(
             `stack sync --stack "${stack}" --working-dir "${this.workingDirectory()}" --yes${
                 updateStrategy ? ` --${updateStrategy}` : ""
-            }`,
+            } --json`,
         );
     }
 
     async pull(stack: string): Promise<void> {
-        await this.exec(`stack pull --stack "${stack}" --working-dir "${this.workingDirectory()}"`);
+        await this.exec(
+            `stack pull --stack "${stack}" --working-dir "${this.workingDirectory()}" --json`,
+        );
     }
 
     async push(stack: string, forceWithLease: boolean): Promise<void> {
         await this.exec(
             `stack push --stack "${stack}" --working-dir "${this.workingDirectory()}" ${
                 forceWithLease ? "--force-with-lease" : ""
-            }`,
+            } --json`,
         );
     }
 
@@ -132,43 +146,120 @@ export class StackApi implements IStackApi {
         await this.exec(
             `stack update --stack "${stack}" --working-dir "${this.workingDirectory()}"${
                 updateStrategy ? ` --${updateStrategy}` : ""
-            }`,
+            } --json`,
         );
     }
 
     async delete(stack: string): Promise<void> {
         await this.exec(
-            `stack delete --stack "${stack}" --working-dir "${this.workingDirectory()}" --yes`,
+            `stack delete --stack "${stack}" --working-dir "${this.workingDirectory()}" --yes --json`,
         );
     }
 
     async cleanup(stack: string): Promise<void> {
         await this.exec(
-            `stack cleanup --stack "${stack}" --working-dir "${this.workingDirectory()}" --yes`,
+            `stack cleanup --stack "${stack}" --working-dir "${this.workingDirectory()}" --yes --json`,
         );
     }
 
     async switchToBranch(branch: string): Promise<void> {
         await this.exec(
-            `stack switch --branch "${branch}" --working-dir "${this.workingDirectory()}"`,
+            `stack switch --branch "${branch}" --working-dir "${this.workingDirectory()}" --json`,
         );
     }
 
     private exec(cmd: string, log: boolean = true, cwd?: string): Promise<string> {
+        // Use spawn so we can stream stderr (and stdout) incrementally to the log output channel.
+        // Previous implementation buffered output via exec and only logged at completion.
         return new Promise<string>((resolve, reject) => {
             this._logger.info(cmd);
-            cp.exec(cmd, { cwd }, (err, stdout, stderr) => {
-                if (err) {
-                    return reject(err);
+            const child = cp.spawn(cmd, { cwd, shell: true });
+
+            let stdoutBuffer = "";
+            let stderrBuffer = ""; // kept in case we want to surface richer errors
+
+            child.stdout.on("data", (data: Buffer) => {
+                const text = data.toString();
+                stdoutBuffer += text;
+                if (log && text) {
+                    this._logger.info(text);
                 }
-                if (log && stdout) {
-                    this._logger.info(stdout);
+            });
+
+            child.stderr.on("data", (data: Buffer) => {
+                const chunk = data.toString();
+                stderrBuffer += chunk;
+                if (!chunk) {
+                    return;
                 }
 
-                if (stderr) {
-                    this._logger.info(stderr);
+                // We may receive partial lines; buffer and process line-by-line
+                this._stderrLineBuffer += chunk;
+                const buffer: string = this._stderrLineBuffer;
+                const lines = buffer.split(/\r?\n/);
+                // Keep last partial (if last char not newline)
+                this._stderrLineBuffer = lines.pop() || "";
+
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed) {
+                        continue;
+                    }
+
+                    let parsed: StackCliLogEvent | undefined;
+                    try {
+                        parsed = JSON.parse(trimmed);
+                    } catch {
+                        // Not JSON; log raw line and continue
+                        this._logger.info(trimmed);
+                        continue;
+                    }
+
+                    if (parsed === undefined) {
+                        continue;
+                    }
+
+                    // Map external log level to VS Code LogOutputChannel methods
+                    switch (parsed.LogLevel) {
+                        case "Trace":
+                            this._logger.trace(parsed.Message);
+                            break;
+                        case "Debug":
+                            this._logger.debug(parsed.Message);
+                            break;
+                        case "Information":
+                            this._logger.info(parsed.Message);
+                            break;
+                        case "Warning":
+                            this._logger.warn(parsed.Message);
+                            break;
+                        case "Error":
+                        case "Critical":
+                            this._logger.error(parsed.Message);
+                            break;
+                        default:
+                            this._logger.info(parsed.Message);
+                            break;
+                    }
                 }
-                return resolve(stdout);
+            });
+
+            child.on("error", (err) => {
+                // Include any accumulated stderr to aid debugging
+                if (stderrBuffer) {
+                    this._logger.info(stderrBuffer);
+                }
+                reject(err);
+            });
+
+            child.on("close", (code) => {
+                if (code === 0) {
+                    return resolve(stdoutBuffer);
+                }
+                const error = new Error(
+                    `Command failed (exit code ${code}): ${cmd}${stderrBuffer ? "\n" + stderrBuffer : ""}`,
+                );
+                reject(error);
             });
         });
     }
