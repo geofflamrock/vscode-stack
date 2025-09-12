@@ -20,6 +20,8 @@ export interface IStackApi {
     getStackSummaries(): Promise<StackSummary[]>;
     getBranchesByCommitterDate(): Promise<string[]>;
     getUpdateStrategyFromConfig(): Promise<UpdateStrategy | undefined>;
+    // Subscribe to streaming status messages emitted by the stack CLI (EventId === 1)
+    onStatus(listener: (status: string) => void): void;
 
     newStack(name: string, sourceBranch: string, branchName?: string): Promise<void>;
 
@@ -46,6 +48,12 @@ export class StackApi implements IStackApi {
 
     // Buffer for partial stderr line fragments while streaming
     private _stderrLineBuffer: string = "";
+    // Registered listeners for status messages (EventId === 1)
+    private _statusListeners: Array<(status: string) => void> = [];
+
+    public onStatus(listener: (status: string) => void): void {
+        this._statusListeners.push(listener);
+    }
 
     private workingDirectory(): string {
         return this._repository.rootUri.fsPath;
@@ -172,7 +180,7 @@ export class StackApi implements IStackApi {
         // Use spawn so we can stream stderr (and stdout) incrementally to the log output channel.
         // Previous implementation buffered output via exec and only logged at completion.
         return new Promise<string>((resolve, reject) => {
-            this._logger.info(cmd);
+            this._logger.info(`Executing command: ${cmd}`);
             const child = cp.spawn(cmd, { cwd, shell: true });
 
             let stdoutBuffer = "";
@@ -240,6 +248,17 @@ export class StackApi implements IStackApi {
                         default:
                             this._logger.info(parsed.Message);
                             break;
+                    }
+
+                    // EventId === 1 indicates a streaming status update from the CLI
+                    if (parsed.EventId === 1 && parsed.Message) {
+                        for (const listener of this._statusListeners) {
+                            try {
+                                listener(parsed.Message);
+                            } catch {
+                                // Swallow listener errors so they don't break streaming
+                            }
+                        }
                     }
                 }
             });

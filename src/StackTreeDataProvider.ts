@@ -64,6 +64,8 @@ const enum GlyphChars {
 export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     private stackCache: StackCache;
     private statusBarItem: StatusBarItem;
+    // Track nested/parallel operations so we don't clear status prematurely
+    private _activeOperations = 0;
 
     constructor(
         private api: IStackApi,
@@ -76,6 +78,13 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
             StatusBarAlignment.Left,
         );
         this.statusBarItem.name = `Stack (${repositoryId})`;
+        // Listen for streaming status messages from the CLI and reflect them in the status bar while an operation is in progress.
+        this.api.onStatus((status: string) => {
+            if (this._activeOperations > 0) {
+                this.statusBarItem.tooltip = status;
+                this.statusBarItem.show();
+            }
+        });
     }
 
     // Expose API for higher-level aggregating providers (multi-repo) to query lightweight summaries
@@ -94,6 +103,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
     }
 
     private async runWithStatus<T>(title: string, fn: () => Promise<T>): Promise<T> {
+        this._activeOperations++;
         this.statusBarItem.text = `$(sync~spin) ${title}`;
         this.statusBarItem.tooltip = title;
         this.statusBarItem.show();
@@ -101,7 +111,14 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
             const result = await fn();
             return result;
         } finally {
-            this.statusBarItem.hide();
+            this._activeOperations = Math.max(0, this._activeOperations - 1);
+            // Only clear when the last active operation finishes
+            if (this._activeOperations === 0) {
+                // Clear text so stale status isn't shown next time until new operation starts
+                this.statusBarItem.text = "";
+                this.statusBarItem.tooltip = undefined;
+                this.statusBarItem.hide();
+            }
         }
     }
 
@@ -310,16 +327,13 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
         }
 
         try {
-            await this.runWithStatus(
-                `Syncing stack '${stack.stack.name}' with remote`,
-                async () => {
-                    if (confirm === syncStackWithMerge) {
-                        await this.api.sync(stack.stack.name, "merge");
-                    } else if (confirm === syncStackWithRebase) {
-                        await this.api.sync(stack.stack.name, "rebase");
-                    }
-                },
-            );
+            await this.runWithStatus(`Syncing stack: ${stack.stack.name}`, async () => {
+                if (confirm === syncStackWithMerge) {
+                    await this.api.sync(stack.stack.name, "merge");
+                } else if (confirm === syncStackWithRebase) {
+                    await this.api.sync(stack.stack.name, "rebase");
+                }
+            });
             this.refresh();
         } catch (err) {
             window.showErrorMessage(`Error syncing changes: ${err}`);
@@ -368,16 +382,13 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
         }
 
         try {
-            await this.runWithStatus(
-                `Updating stack '${stack.stack.name}' with remote`,
-                async () => {
-                    if (confirm === updateStackWithMerge) {
-                        await this.api.update(stack.stack.name, "merge");
-                    } else if (confirm === updateStackWithRebase) {
-                        await this.api.update(stack.stack.name, "rebase");
-                    }
-                },
-            );
+            await this.runWithStatus(`Updating stack: ${stack.stack.name}`, async () => {
+                if (confirm === updateStackWithMerge) {
+                    await this.api.update(stack.stack.name, "merge");
+                } else if (confirm === updateStackWithRebase) {
+                    await this.api.update(stack.stack.name, "rebase");
+                }
+            });
             this.refresh();
         } catch (err) {
             window.showErrorMessage(`Error updating changes: ${err}`);
