@@ -15,6 +15,11 @@ interface StackCliLogEvent {
     Message: string;
 }
 
+const StackCliEvents = {
+    Status: 1,
+    Success: 2,
+};
+
 export interface IStackApi {
     getStacks(): Promise<Stack[]>;
     getStackSummaries(): Promise<StackSummary[]>;
@@ -180,7 +185,7 @@ export class StackApi implements IStackApi {
         // Use spawn so we can stream stderr (and stdout) incrementally to the log output channel.
         // Previous implementation buffered output via exec and only logged at completion.
         return new Promise<string>((resolve, reject) => {
-            this._logger.info(`Executing command: ${cmd}`);
+            this._logger.info(`[command] ${cmd}`);
             const child = cp.spawn(cmd, { cwd, shell: true });
 
             let stdoutBuffer = "";
@@ -227,31 +232,45 @@ export class StackApi implements IStackApi {
                         continue;
                     }
 
+                    let prefix = "";
+
+                    switch (parsed.EventId) {
+                        case StackCliEvents.Status:
+                            prefix = "[status] ";
+                            break;
+                        case StackCliEvents.Success:
+                            prefix = "[success] ";
+                            break;
+                        default:
+                            prefix = "";
+                            break;
+                    }
+
                     // Map external log level to VS Code LogOutputChannel methods
                     switch (parsed.LogLevel) {
                         case "Trace":
-                            this._logger.trace(parsed.Message);
+                            this._logger.trace(`${prefix}${parsed.Message}`);
                             break;
                         case "Debug":
-                            this._logger.debug(parsed.Message);
+                            this._logger.debug(`${prefix}${parsed.Message}`);
                             break;
                         case "Information":
-                            this._logger.info(parsed.Message);
+                            this._logger.info(`${prefix}${parsed.Message}`);
                             break;
                         case "Warning":
-                            this._logger.warn(parsed.Message);
+                            this._logger.warn(`${prefix}${parsed.Message}`);
                             break;
                         case "Error":
                         case "Critical":
-                            this._logger.error(parsed.Message);
+                            this._logger.error(`${prefix}${parsed.Message}`);
                             break;
                         default:
-                            this._logger.info(parsed.Message);
+                            this._logger.info(`${prefix}${parsed.Message}`);
                             break;
                     }
 
                     // EventId === 1 indicates a streaming status update from the CLI
-                    if (parsed.EventId === 1 && parsed.Message) {
+                    if (parsed.EventId === StackCliEvents.Status && parsed.Message) {
                         for (const listener of this._statusListeners) {
                             try {
                                 listener(parsed.Message);

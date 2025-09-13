@@ -77,7 +77,7 @@ export class StackTreeDataProvider implements TreeDataProvider<StackTreeData> {
             `stackProgress:${repositoryId}`,
             StatusBarAlignment.Left,
         );
-        this.statusBarItem.name = `Stack (${repositoryId})`;
+        this.statusBarItem.name = "Stack Operation";
         // Listen for streaming status messages from the CLI and reflect them in the status bar while an operation is in progress.
         this.api.onStatus((status: string) => {
             if (this._activeOperations > 0) {
